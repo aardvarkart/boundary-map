@@ -1,0 +1,1008 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Conference Finder</title>
+<meta name="description" content="Find which St. Vincent de Paul conference serves an address.">
+<meta name="theme-color" content="#2F4E8C">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Conferences">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+:root{
+  --paper:#F4F6F9; --surface:#FFFFFF; --ink:#18202E; --muted:#5A6476; --line:#DCE1E9; --soft:#EEF1F6;
+  --marian:#2F4E8C; --marian-ink:#FFFFFF; --marian-soft:#E6ECF7; --gold:#B8892B; --danger:#A33A2F;
+  --serif:"Source Serif 4", "Iowan Old Style", Georgia, serif;
+  --sans:"Public Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --r-sm:8px; --r-md:12px; --r-lg:18px;
+  --shadow:0 1px 2px rgba(24,32,46,.06), 0 10px 30px rgba(24,32,46,.10);
+  --panel-w:400px;
+  color-scheme:light dark;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --paper:#11151C; --surface:#181E27; --ink:#E7EBF2; --muted:#9AA4B5; --line:#2A3240; --soft:#202734;
+    --marian:#8EA9DD; --marian-ink:#0E1420; --marian-soft:#223051; --gold:#D4A84A; --danger:#E3887C;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35);
+  }
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0}
+body{font:15px/1.5 var(--sans);color:var(--ink);background:var(--paper);-webkit-font-smoothing:antialiased;overflow:hidden}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--marian);outline-offset:2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+svg.i{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+#app{display:grid;grid-template-columns:var(--panel-w) 1fr;height:100%}
+#map{height:100%;background:var(--soft);z-index:1}
+
+/* Panel */
+#panel{position:relative;z-index:2;display:flex;flex-direction:column;min-height:0;background:var(--surface);border-right:1px solid var(--line);padding-top:env(safe-area-inset-top)}
+.handle{display:none}
+.brand{display:flex;gap:12px;align-items:center;padding:20px 22px 14px}
+.brand .mark{width:38px;height:38px;border-radius:10px;background:var(--marian);display:grid;place-items:center;flex:none}
+.brand .mark svg{width:22px;height:22px}
+.brand h1{font:600 19px/1.2 var(--serif);margin:0;letter-spacing:-.005em}
+.brand p{margin:2px 0 0;color:var(--muted);font-size:13px}
+.brand .mode{margin-left:auto;font-size:12px;font-weight:600;color:var(--gold);border:1px solid currentColor;border-radius:999px;padding:2px 9px}
+
+.search{position:relative;padding:0 18px 14px}
+.field{display:flex;align-items:center;gap:8px;background:var(--soft);border:1px solid transparent;border-radius:var(--r-md);padding:0 6px 0 12px;height:48px;transition:border-color .15s, background .15s}
+.field:focus-within{background:var(--surface);border-color:var(--marian)}
+.field svg.i{color:var(--muted)}
+.field input{flex:1;min-width:0;border:0;background:none;outline:none;font-size:16px;height:100%}
+.field input::-webkit-search-cancel-button{display:none}
+.iconbtn{display:grid;place-items:center;width:36px;height:36px;border:0;border-radius:10px;background:none;color:var(--muted)}
+.iconbtn:hover{background:var(--line);color:var(--ink)}
+.iconbtn.busy svg{animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#suggest{position:absolute;left:18px;right:18px;top:52px;margin:0;padding:6px;list-style:none;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);box-shadow:var(--shadow);z-index:10;max-height:320px;overflow:auto}
+#suggest li{padding:9px 10px;border-radius:var(--r-sm);cursor:pointer}
+#suggest li[aria-selected="true"],#suggest li:hover{background:var(--soft)}
+#suggest .l1{font-weight:500}
+#suggest .l2{color:var(--muted);font-size:13px}
+#suggest .empty{color:var(--muted);cursor:default}
+#suggest .empty:hover{background:none}
+
+.scroll{flex:1;overflow:auto;padding:0 18px 18px;overscroll-behavior:contain}
+.section-h{display:flex;align-items:baseline;justify-content:space-between;margin:14px 4px 8px}
+.section-h h2{font:600 14px/1.3 var(--sans);margin:0}
+.section-h span{color:var(--muted);font-size:13px}
+
+/* Result: the one bold moment */
+.result{border-radius:var(--r-lg);background:var(--surface);border:1px solid var(--line);overflow:hidden;margin-bottom:6px;animation:rise .28s ease-out}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.result .where{display:flex;gap:10px;align-items:flex-start;padding:14px 16px;background:var(--soft);font-size:14px;color:var(--muted)}
+.result .where b{display:block;color:var(--ink);font-weight:500}
+.result .where button{margin-left:auto}
+.hit{padding:18px 18px 16px;border-left:5px solid var(--c);}
+.hit + .hit{border-top:1px solid var(--line)}
+.hit .lead{font-size:13px;color:var(--muted);margin:0 0 4px}
+.hit h3{font:600 26px/1.15 var(--serif);margin:0;letter-spacing:-.01em;text-wrap:balance}
+.hit .parish{color:var(--muted);margin:4px 0 0}
+.hit .notes{margin:12px 0 0;white-space:pre-wrap}
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.btn{display:inline-flex;align-items:center;gap:8px;height:40px;padding:0 14px;border-radius:10px;border:1px solid var(--line);background:var(--surface);font-weight:500;text-decoration:none;color:var(--ink);white-space:nowrap}
+.btn:hover{background:var(--soft)}
+.btn.primary{background:var(--marian);border-color:var(--marian);color:var(--marian-ink)}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn.danger{color:var(--danger)}
+.btn.ghost{border-color:transparent;background:none}
+.btn.full{width:100%;justify-content:center}
+.btn:disabled{opacity:.5;cursor:default}
+.miss{padding:18px}
+.miss h3{font:600 22px/1.2 var(--serif);margin:0}
+.miss p{margin:6px 0 0;color:var(--muted)}
+.warn{margin:0;padding:10px 18px;background:color-mix(in srgb,var(--gold) 14%,transparent);font-size:13px}
+
+/* Lists */
+.list{list-style:none;margin:0;padding:0}
+.list li{display:flex;align-items:center;gap:12px;padding:11px 10px;border-radius:var(--r-md);cursor:pointer}
+.list li:hover,.list li.on{background:var(--soft)}
+.sw{width:14px;height:14px;border-radius:4px;background:var(--c);flex:none;box-shadow:inset 0 0 0 1px rgba(0,0,0,.12)}
+.list .nm{font-weight:500;line-height:1.3}
+.list .sub{font-size:13px;color:var(--muted)}
+.list .grow{flex:1;min-width:0}
+.list .chev{color:var(--muted)}
+.emptystate{padding:22px 16px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:var(--r-lg)}
+.emptystate h3{font:600 18px/1.3 var(--serif);color:var(--ink);margin:0 0 6px}
+
+/* Admin */
+.pubbar{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:var(--r-md);background:var(--soft);margin:4px 0 12px;font-size:14px}
+.pubbar.dirty{background:color-mix(in srgb,var(--gold) 16%,var(--surface))}
+.pubbar .dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
+.pubbar.dirty .dot{background:var(--gold)}
+.pubbar .txt{flex:1}
+.tools{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px}
+.tools .btn.primary{grid-column:1/-1;justify-content:center;height:46px}
+.tools .btn{justify-content:center}
+.form label{display:block;font-size:13px;font-weight:500;margin:14px 0 6px}
+.form input,.form textarea{width:100%;border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:10px 12px;font-size:16px;outline:none}
+.form input:focus,.form textarea:focus{border-color:var(--marian)}
+.form textarea{min-height:80px;resize:vertical}
+.form .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.swatches{display:flex;flex-wrap:wrap;gap:8px}
+.swatches button{width:32px;height:32px;border-radius:50%;border:0;background:var(--c);box-shadow:inset 0 0 0 1px rgba(0,0,0,.15)}
+.swatches button[aria-pressed="true"]{box-shadow:0 0 0 2px var(--surface),0 0 0 4px var(--c)}
+.formhead{display:flex;align-items:center;gap:6px;margin:6px 0 2px}
+.formhead h2{font:600 18px/1.3 var(--serif);margin:0;flex:1}
+.formfoot{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap}
+details.settings{margin-top:18px;border-top:1px solid var(--line);padding-top:6px}
+details.settings summary{cursor:pointer;padding:10px 4px;font-weight:600;font-size:14px;list-style:none;display:flex;justify-content:space-between}
+details.settings summary::after{content:"+";color:var(--muted)}
+details.settings[open] summary::after{content:"–"}
+.hint{font-size:13px;color:var(--muted);margin:6px 0 0}
+
+footer.foot{border-top:1px solid var(--line);padding:10px 18px calc(10px + env(safe-area-inset-bottom));display:flex;align-items:center;justify-content:space-between;font-size:13px;color:var(--muted)}
+footer.foot button{border:0;background:none;color:var(--muted);font-weight:500;padding:6px 8px;border-radius:8px;display:inline-flex;gap:6px;align-items:center}
+footer.foot button:hover{background:var(--soft);color:var(--ink)}
+
+/* Map chrome */
+.leaflet-container{font-family:var(--sans);background:var(--soft)}
+.pin{filter:drop-shadow(0 3px 4px rgba(0,0,0,.3))}
+.leaflet-tooltip.tip{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);font-weight:500;padding:5px 9px}
+.leaflet-tooltip.tip::before{display:none}
+.leaflet-control-zoom a{background:var(--surface)!important;color:var(--ink)!important;border-color:var(--line)!important}
+.leaflet-control-attribution{background:color-mix(in srgb,var(--surface) 85%,transparent)!important;color:var(--muted)!important}
+.leaflet-control-attribution a{color:var(--muted)!important}
+#banner{position:fixed;z-index:1000;top:calc(14px + env(safe-area-inset-top));left:calc(var(--panel-w) + 50%);transform:translateX(calc(-50% - var(--panel-w)/2));width:min(560px,calc(100vw - var(--panel-w) - 28px));background:var(--ink);color:var(--paper);border-radius:var(--r-md);box-shadow:var(--shadow);padding:12px 12px 12px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+#banner .txt{flex:1 1 200px;font-size:14px}
+#banner .btn{height:34px;background:transparent;color:var(--paper);border-color:color-mix(in srgb,var(--paper) 30%,transparent)}
+#banner .btn.primary{background:var(--paper);color:var(--ink);border-color:var(--paper)}
+#toast{position:fixed;z-index:1100;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translate(-50%,20px);opacity:0;pointer-events:none;background:var(--ink);color:var(--paper);padding:11px 16px;border-radius:12px;box-shadow:var(--shadow);font-size:14px;max-width:calc(100vw - 32px);transition:opacity .2s, transform .2s}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+#toast.err{background:var(--danger);color:#fff}
+
+dialog{border:0;border-radius:var(--r-lg);padding:0;width:min(440px,calc(100vw - 32px));background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+dialog::backdrop{background:rgba(10,14,22,.45)}
+dialog .db{padding:22px 22px 8px}
+dialog h2{font:600 21px/1.25 var(--serif);margin:0 0 8px}
+dialog p{margin:0 0 10px;color:var(--muted)}
+dialog .df{display:flex;justify-content:flex-end;gap:8px;padding:12px 22px 20px}
+dialog .form label:first-child{margin-top:4px}
+dialog a{color:var(--marian)}
+
+/* Mobile: bottom sheet */
+@media (max-width:760px){
+  #app{display:block}
+  #map{position:fixed;inset:0}
+  #panel{position:fixed;left:0;right:0;bottom:0;border-right:0;border-radius:20px 20px 0 0;box-shadow:0 -6px 30px rgba(10,14,22,.18);padding-top:0;height:var(--h);transition:height .28s cubic-bezier(.2,.8,.2,1)}
+  #panel[data-sheet="peek"]{--h:calc(142px + env(safe-area-inset-bottom))}
+  #panel[data-sheet="half"]{--h:56%}
+  #panel[data-sheet="full"]{--h:calc(100% - 52px - env(safe-area-inset-top))}
+  #panel.dragging{transition:none}
+  .handle{display:block;padding:8px 0 2px;cursor:grab;touch-action:none}
+  .handle span{display:block;margin:0 auto;width:40px;height:5px;border-radius:3px;background:var(--line)}
+  .brand{padding:6px 18px 10px}
+  .brand .mark{width:32px;height:32px;border-radius:9px}
+  .brand h1{font-size:17px}
+  .brand p{display:none}
+  #panel[data-sheet="peek"] .scroll,#panel[data-sheet="peek"] footer.foot{visibility:hidden}
+  #banner{left:50%;transform:translateX(-50%);width:calc(100vw - 24px)}
+  .leaflet-top{top:env(safe-area-inset-top)}
+  .leaflet-bottom.leaflet-right{bottom:calc(142px + env(safe-area-inset-bottom))}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="panel" data-sheet="peek" aria-label="Search and results">
+    <div class="handle" id="handle" role="button" aria-label="Resize panel" tabindex="0"><span></span></div>
+    <header class="brand">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><path d="M12 13.2l-2.6-2.5a1.6 1.6 0 0 1 2.3-2.3l.3.3.3-.3a1.6 1.6 0 0 1 2.3 2.3z" fill="#fff" stroke="none"/></svg>
+      </div>
+      <div>
+        <h1 id="title">Conference Finder</h1>
+        <p id="subtitle">Society of St. Vincent de Paul</p>
+      </div>
+      <span class="mode" id="modeTag" hidden>Editing</span>
+    </header>
+    <div class="search">
+      <label for="q" class="sr">Search an address</label>
+      <div class="field">
+        <svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
+        <input id="q" type="search" placeholder="Search an address" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search" role="combobox" aria-expanded="false" aria-controls="suggest" aria-autocomplete="list">
+        <button class="iconbtn" id="clearQ" title="Clear search" aria-label="Clear search" hidden><svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        <button class="iconbtn" id="locate" title="Use my location" aria-label="Use my location"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7.5"/></svg></button>
+      </div>
+      <ul id="suggest" role="listbox" hidden></ul>
+    </div>
+    <div class="scroll" id="scroll">
+      <div id="viewMode">
+        <div id="result"></div>
+        <div class="section-h"><h2>Conferences</h2><span id="count"></span></div>
+        <ul class="list" id="list"></ul>
+      </div>
+      <div id="adminMode" hidden></div>
+    </div>
+    <footer class="foot">
+      <span id="footNote">Tap the map to check any spot</span>
+      <button id="adminBtn"><svg class="i" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3"/></svg><span>Admin</span></button>
+    </footer>
+  </aside>
+  <main id="map" aria-label="Map"></main>
+</div>
+<div id="banner" hidden></div>
+<div id="toast" role="status" aria-live="polite"></div>
+<dialog id="dlg"></dialog>
+<input type="file" id="fileIn" accept=".geojson,.json,.kml,application/geo+json,application/json,application/vnd.google-earth.kml+xml" hidden>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+"use strict";
+/* ───────────────────────── Configuration ─────────────────────────
+   Most people never need to touch this. Title, subtitle and starting
+   view can all be changed from Admin → Map settings inside the app.  */
+const CONFIG = {
+  title: "Conference Finder",
+  subtitle: "Society of St. Vincent de Paul",
+  center: [39.5, -98.35], zoom: 4,          // fallback view before any areas exist
+  dataFile: "boundaries.geojson",
+  // Filled in automatically when hosted on GitHub Pages (username.github.io/repo).
+  repo: { owner: "", name: "", branch: "main" }
+};
+const LIBS = {
+  geomanCss: "https://cdn.jsdelivr.net/npm/@geoman-io/leaflet-geoman-free@2.20.2/dist/leaflet-geoman.css",
+  geomanJs:  "https://cdn.jsdelivr.net/npm/@geoman-io/leaflet-geoman-free@2.20.2/dist/leaflet-geoman.min.js",
+  togeojson: "https://cdn.jsdelivr.net/npm/@tmcw/togeojson@7.1.2/dist/togeojson.umd.js"
+};
+const PALETTE = ["#2F4E8C","#7A3E6B","#2E7D6B","#B8892B","#A2463A","#4F6B2C","#5B5FA8","#8A6A3F","#2C7A9A","#9A4F7F"];
+const USE_MILES = /^en-(US|GB|LR|MM)/i.test(navigator.language || "en-US");
+
+/* ───────────────────────── Small helpers ───────────────────────── */
+const $ = (s) => document.querySelector(s);
+const LS = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  del(k) { try { localStorage.removeItem(k); } catch {} }
+};
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k === "style") el.style.cssText = v;
+    else if (k === "html") el.innerHTML = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of kids.flat()) { if (c == null || c === false) continue; el.append(c.nodeType ? c : document.createTextNode(String(c))); }
+  return el;
+}
+const ICON = {
+  phone: '<svg class="i" viewBox="0 0 24 24"><path d="M5 4h3.5l1.5 4-2 1.3a11 11 0 0 0 6.7 6.7L16 14l4 1.5V19a1.5 1.5 0 0 1-1.6 1.5A16 16 0 0 1 3.5 5.6 1.5 1.5 0 0 1 5 4z"/></svg>',
+  mail: '<svg class="i" viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="2"/><path d="M4 7l8 6 8-6"/></svg>',
+  edit: '<svg class="i" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
+  shape: '<svg class="i" viewBox="0 0 24 24"><path d="M5 6l13-2 2 12-11 4z"/><circle cx="5" cy="6" r="1.6" fill="currentColor"/><circle cx="18" cy="4" r="1.6" fill="currentColor"/><circle cx="20" cy="16" r="1.6" fill="currentColor"/><circle cx="9" cy="20" r="1.6" fill="currentColor"/></svg>',
+  trash: '<svg class="i" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+  plus: '<svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+  up: '<svg class="i" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>',
+  down: '<svg class="i" viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>',
+  back: '<svg class="i" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>',
+  close: '<svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  chev: '<svg class="i chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>',
+  pin: '<svg class="i" viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
+  lock: '<svg class="i" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3"/></svg>',
+  exit: '<svg class="i" viewBox="0 0 24 24"><path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/></svg>'
+};
+const uid = () => "c" + Math.random().toString(36).slice(2, 9);
+const loadScript = (src) => new Promise((ok, no) => { if (document.querySelector(`script[src="${src}"]`)) return ok(); const s = h("script", { src }); s.onload = ok; s.onerror = () => no(new Error("Could not load " + src)); document.head.append(s); });
+const loadCss = (href) => { if (!document.querySelector(`link[href="${href}"]`)) document.head.append(h("link", { rel: "stylesheet", href })); };
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+let toastTimer;
+function toast(msg, isErr) {
+  const t = $("#toast"); t.textContent = msg; t.className = "show" + (isErr ? " err" : "");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.className = "", isErr ? 6000 : 3500);
+}
+
+/* Modal dialog. Resolves with the value of the clicked button. */
+function modal({ title, body = [], buttons = [{ label: "OK", value: true, primary: true }], onOpen }) {
+  const d = $("#dlg"); d.replaceChildren();
+  return new Promise((resolve) => {
+    const finish = (v) => { d.close(); resolve(v); };
+    d.append(
+      h("div", { class: "db" }, h("h2", {}, title), body),
+      h("div", { class: "df" }, buttons.map(b => h("button", {
+        class: "btn" + (b.primary ? " primary" : "") + (b.danger ? " danger" : ""),
+        onclick: async () => { if (b.before) { const ok = await b.before(); if (!ok) return; } finish(b.value); }
+      }, b.label)))
+    );
+    d.oncancel = (e) => { e.preventDefault(); finish(null); };
+    d.showModal(); onOpen && onOpen(d);
+  });
+}
+const confirmDlg = (title, text, okLabel, danger) => modal({ title, body: [h("p", {}, text)], buttons: [{ label: "Cancel", value: false }, { label: okLabel, value: true, primary: !danger, danger }] });
+
+/* ───────────────────────── Geometry ───────────────────────── */
+function inRing([x, y], ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+const inPoly = (pt, rings) => inRing(pt, rings[0]) && !rings.slice(1).some(r => inRing(pt, r));
+function contains(geom, pt) {
+  if (!geom) return false;
+  if (geom.type === "Polygon") return inPoly(pt, geom.coordinates);
+  if (geom.type === "MultiPolygon") return geom.coordinates.some(p => inPoly(pt, p));
+  return false;
+}
+function distanceTo(geom, [lng, lat]) {   // metres from a point to the edge of an area
+  const rings = geom.type === "Polygon" ? geom.coordinates : geom.coordinates.flat();
+  const k = Math.cos(lat * Math.PI / 180), M = 111320;
+  let best = Infinity;
+  for (const ring of rings) for (let i = 0; i < ring.length - 1; i++) {
+    const ax = (ring[i][0] - lng) * k, ay = ring[i][1] - lat, bx = (ring[i + 1][0] - lng) * k, by = ring[i + 1][1] - lat;
+    const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+    const t = L2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / L2)) : 0;
+    const px = ax + t * dx, py = ay + t * dy;
+    best = Math.min(best, Math.hypot(px, py));
+  }
+  return best * M;
+}
+function fmtDist(m) {
+  if (USE_MILES) { const mi = m / 1609.34; return mi < 0.1 ? Math.round(m * 3.281) + " ft" : mi.toFixed(mi < 10 ? 1 : 0) + " mi"; }
+  return m < 1000 ? Math.round(m) + " m" : (m / 1000).toFixed(1) + " km";
+}
+const roundGeom = (g) => JSON.parse(JSON.stringify(g, (k, v) => typeof v === "number" ? Math.round(v * 1e6) / 1e6 : v));
+
+/* ───────────────────────── State ───────────────────────── */
+const state = {
+  data: null, layers: new Map(), admin: false, dirty: false, sha: null,
+  selected: null, marker: null, lastCheck: null, editingShape: null
+};
+const features = () => state.data.features;
+const byId = (id) => features().find(f => f.properties.id === id);
+
+function normalize(d) {
+  d = d && d.type === "FeatureCollection" ? d : { type: "FeatureCollection", features: [] };
+  const meta = Object.assign({ title: CONFIG.title, subtitle: CONFIG.subtitle }, d.meta || {});
+  const used = new Set();
+  const feats = (d.features || []).filter(f => f && f.geometry && /^(Multi)?Polygon$/.test(f.geometry.type)).map((f, i) => {
+    const p = Object.assign({ name: "Unnamed area", color: PALETTE[i % PALETTE.length] }, f.properties || {});
+    if (!p.id || used.has(p.id)) p.id = uid();
+    used.add(p.id);
+    return { type: "Feature", properties: p, geometry: f.geometry };
+  });
+  return { type: "FeatureCollection", meta, features: feats };
+}
+
+/* ───────────────────────── Map ───────────────────────── */
+const dark = matchMedia("(prefers-color-scheme: dark)");
+const map = L.map("map", { zoomControl: false, attributionControl: true, tapTolerance: 20 });
+L.control.zoom({ position: "topright" }).addTo(map);
+map.attributionControl.setPrefix(false);
+let tiles;
+function setTiles() {
+  tiles && tiles.remove();
+  tiles = L.tileLayer(`https://{s}.basemaps.cartocdn.com/${dark.matches ? "dark_all" : "rastertiles/voyager"}/{z}/{x}/{y}{r}.png`, {
+    subdomains: "abcd", maxZoom: 20,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+  }).addTo(map);
+  tiles.bringToBack();
+}
+setTiles(); dark.addEventListener?.("change", setTiles);
+
+const isMobile = () => matchMedia("(max-width:760px)").matches;
+function fitPadding() {
+  if (!isMobile()) return { paddingTopLeft: [40, 40], paddingBottomRight: [40, 40] };
+  const H = innerHeight, sheet = $("#panel").dataset.sheet;
+  const ph = sheet === "peek" ? 150 : sheet === "full" ? H - 60 : H * .56;   // target height, not mid-animation height
+  return { paddingTopLeft: [24, 60], paddingBottomRight: [24, ph + 24] };
+}
+function fitTo(bounds, maxZoom = 16) { if (bounds && bounds.isValid()) map.flyToBounds(bounds, Object.assign({ maxZoom, duration: .6 }, fitPadding())); }
+function allBounds() { const b = L.latLngBounds([]); state.layers.forEach(l => b.extend(l.getBounds())); return b; }
+function startView() {
+  const v = state.data.meta.view;
+  if (v && v.center) map.setView(v.center, v.zoom || 12);
+  else if (features().length) map.fitBounds(allBounds(), fitPadding());
+  else map.setView(CONFIG.center, CONFIG.zoom);
+}
+
+const style = (f, on) => ({ color: f.properties.color, weight: on ? 3 : 1.75, opacity: .95, fillColor: f.properties.color, fillOpacity: on ? .26 : .1 });
+let highlighted = new Set();
+function addLayer(f) {
+  const layer = L.geoJSON(f).getLayers()[0];
+  layer.setStyle(style(f, false));
+  layer.featureId = f.properties.id;
+  if (matchMedia("(hover:hover)").matches) layer.bindTooltip(() => byId(layer.featureId)?.properties.name || "", { sticky: true, className: "tip", direction: "top", offset: [0, -8] });
+  layer.on("click", (e) => {
+    if (map.pm && (map.pm.globalDrawModeEnabled() || state.editingShape)) return;
+    L.DomEvent.stopPropagation(e);
+    if (state.admin) selectArea(layer.featureId);
+    else checkPoint(e.latlng, "Point on the map");
+  });
+  layer.addTo(map);
+  state.layers.set(f.properties.id, layer);
+  return layer;
+}
+function drawLayers() { state.layers.forEach(l => l.remove()); state.layers.clear(); features().forEach(addLayer); }
+function setHighlight(ids) {
+  highlighted = new Set(ids);
+  state.layers.forEach((l, id) => { const f = byId(id); if (f) l.setStyle(style(f, highlighted.has(id))); });
+  ids.forEach(id => state.layers.get(id)?.bringToFront());
+}
+
+const pinIcon = L.divIcon({
+  className: "pin", iconSize: [30, 40], iconAnchor: [15, 38],
+  html: '<svg width="30" height="40" viewBox="0 0 30 40"><path d="M15 39s13-12.2 13-23.5A13 13 0 0 0 2 15.5C2 26.8 15 39 15 39z" fill="#18202E" stroke="#fff" stroke-width="2"/><circle cx="15" cy="15.5" r="5" fill="#fff"/></svg>'
+});
+function placeMarker(latlng) { state.marker ? state.marker.setLatLng(latlng) : (state.marker = L.marker(latlng, { icon: pinIcon, keyboard: false, interactive: false }).addTo(map)); }
+function clearMarker() { state.marker && state.marker.remove(); state.marker = null; }
+
+map.on("click", (e) => {
+  if (state.admin || (map.pm && map.pm.globalDrawModeEnabled())) return;
+  checkPoint(e.latlng, "Point on the map");
+});
+
+/* ───────────────────────── Lookup & results ───────────────────────── */
+function checkPoint(latlng, label, sublabel) {
+  const pt = [latlng.lng, latlng.lat];
+  const hits = features().filter(f => contains(f.geometry, pt));
+  let nearest = null;
+  if (!hits.length && features().length) {
+    nearest = features().map(f => ({ f, d: distanceTo(f.geometry, pt) })).sort((a, b) => a.d - b.d)[0];
+  }
+  state.lastCheck = { latlng, label, sublabel };
+  placeMarker(latlng);
+  setHighlight(hits.map(f => f.properties.id));
+  renderResult({ label, sublabel, hits, nearest });
+  if (!state.admin) setSheet("half");
+  const b = L.latLngBounds([latlng]);
+  if (map.getZoom() < 14 || !map.getBounds().pad(-.15).contains(latlng)) {
+    hits.length === 1 && !isMobile() ? fitTo(state.layers.get(hits[0].properties.id).getBounds().extend(b), 16) : fitTo(b.pad(.002), 16);
+  }
+}
+
+function conferenceBlock(f, lead) {
+  const p = f.properties;
+  const actions = [];
+  if (p.phone) actions.push(h("a", { class: "btn primary", href: "tel:" + p.phone.replace(/[^\d+]/g, ""), html: ICON.phone + "<span></span>" }));
+  if (p.email) actions.push(h("a", { class: "btn", href: "mailto:" + p.email, html: ICON.mail + "<span></span>" }));
+  if (actions[0] && p.phone) actions[0].querySelector("span").textContent = "Call " + p.phone;
+  if (p.email) actions[actions.length - 1].querySelector("span").textContent = "Email";
+  return h("div", { class: "hit", style: "--c:" + p.color },
+    lead ? h("p", { class: "lead" }, lead) : null,
+    h("h3", {}, p.name),
+    p.parish ? h("p", { class: "parish" }, p.parish) : null,
+    p.contact ? h("p", { class: "parish" }, "Contact: " + p.contact) : null,
+    p.notes ? h("p", { class: "notes" }, p.notes) : null,
+    actions.length ? h("div", { class: "actions" }, actions) : null
+  );
+}
+
+function renderResult({ label, sublabel, hits, nearest }) {
+  const box = $("#result");
+  const where = h("div", { class: "where" },
+    h("span", { html: ICON.pin }),
+    h("div", {}, h("b", {}, label), sublabel ? sublabel : null),
+    h("button", { class: "iconbtn", "aria-label": "Clear result", title: "Clear result", html: ICON.close, onclick: clearResult })
+  );
+  let body;
+  if (!features().length) {
+    body = h("div", { class: "miss" }, h("h3", {}, "No areas set up yet"), h("p", {}, "Conference boundaries haven't been added. An admin can draw them from the Admin button below."));
+  } else if (hits.length === 1) {
+    body = conferenceBlock(hits[0], "This address is served by");
+  } else if (hits.length > 1) {
+    body = [h("p", { class: "warn" }, `This spot falls inside ${hits.length} overlapping areas. An admin may want to adjust these boundaries.`), hits.map(f => conferenceBlock(f))];
+  } else {
+    body = h("div", { class: "miss" },
+      h("h3", {}, "Outside every conference area"),
+      nearest ? h("p", {}, `The closest is ${nearest.f.properties.name}, about ${fmtDist(nearest.d)} away.`) : null,
+      nearest ? h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => showConference(nearest.f.properties.id) }, "View " + nearest.f.properties.name)) : null
+    );
+  }
+  box.replaceChildren(h("div", { class: "result" }, where, body));
+  $("#scroll").scrollTop = 0;
+}
+function clearResult() {
+  $("#result").replaceChildren(); clearMarker(); setHighlight([]); state.lastCheck = null;
+  $("#q").value = ""; $("#clearQ").hidden = true;
+}
+function showConference(id) {
+  const f = byId(id); if (!f) return;
+  setHighlight([id]);
+  fitTo(state.layers.get(id).getBounds());
+  clearMarker();
+  $("#result").replaceChildren(h("div", { class: "result" },
+    h("div", { class: "where" }, h("span", { html: ICON.shape }), h("div", {}, h("b", {}, "Conference area")),
+      h("button", { class: "iconbtn", "aria-label": "Close", title: "Close", html: ICON.close, onclick: clearResult })),
+    conferenceBlock(f)));
+  setSheet("half");
+  $("#scroll").scrollTop = 0;
+}
+
+function renderList() {
+  const list = $("#list"); const n = features().length;
+  $("#count").textContent = n ? n + (n === 1 ? " area" : " areas") : "";
+  if (!n) {
+    list.replaceChildren(h("li", { style: "cursor:default;padding:0" }, h("div", { class: "emptystate", style: "width:100%" },
+      h("h3", {}, "No conference areas yet"), h("p", { style: "margin:0" }, "Open Admin to draw the first boundary or import a map file."))));
+    return;
+  }
+  const sorted = [...features()].sort((a, b) => a.properties.name.localeCompare(b.properties.name));
+  list.replaceChildren(...sorted.map(f => h("li", { tabindex: 0, role: "button", onclick: () => showConference(f.properties.id), onkeydown: (e) => e.key === "Enter" && showConference(f.properties.id) },
+    h("span", { class: "sw", style: "--c:" + f.properties.color }),
+    h("div", { class: "grow" }, h("div", { class: "nm" }, f.properties.name), f.properties.parish ? h("div", { class: "sub" }, f.properties.parish) : null),
+    h("span", { html: ICON.chev })
+  )));
+}
+function renderHeader() {
+  const m = state.data.meta;
+  $("#title").textContent = m.title || CONFIG.title;
+  $("#subtitle").textContent = m.subtitle || "";
+  document.title = m.title || CONFIG.title;
+}
+
+/* ───────────────────────── Address search ───────────────────────── */
+const q = $("#q"), sug = $("#suggest");
+let sugItems = [], sugIdx = -1, sugCtrl = null;
+
+function biasCenter() { const b = features().length ? allBounds() : null; return b && b.isValid() ? b.getCenter() : map.getCenter(); }
+function fromPhoton(f) {
+  const p = f.properties || {};
+  const street = [p.housenumber, p.street].filter(Boolean).join(" ");
+  const l1 = street || p.name || [p.city, p.state].filter(Boolean).join(", ");
+  const l2 = [p.name && street ? p.name : null, p.city || p.county, [p.state, p.postcode].filter(Boolean).join(" "), p.countrycode && p.countrycode !== "US" ? p.country : null].filter(Boolean).filter(x => x !== l1).join(", ");
+  return { l1, l2, lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0] };
+}
+function fromNominatim(r) {
+  const a = r.address || {};
+  const street = [a.house_number, a.road].filter(Boolean).join(" ");
+  const l1 = street || r.name || r.display_name.split(",")[0];
+  const l2 = [a.city || a.town || a.village || a.county, [a.state, a.postcode].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+  return { l1, l2, lat: +r.lat, lng: +r.lon };
+}
+async function geocode(text, signal, allowFallback) {
+  const c = biasCenter();
+  try {
+    const r = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(text)}&limit=6&lang=en&lat=${c.lat.toFixed(4)}&lon=${c.lng.toFixed(4)}`, { signal });
+    if (!r.ok) throw new Error("photon " + r.status);
+    const j = await r.json();
+    const out = (j.features || []).map(fromPhoton);
+    if (out.length || !allowFallback) return out;
+  } catch (e) { if (e.name === "AbortError" || !allowFallback) throw e; }
+  const r = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=5&q=${encodeURIComponent(text)}`, { signal });
+  if (!r.ok) throw new Error("Address search is unavailable right now.");
+  return (await r.json()).map(fromNominatim);
+}
+function showSuggest(items, emptyText) {
+  sugItems = items; sugIdx = -1;
+  if (!items.length && !emptyText) return hideSuggest();
+  sug.replaceChildren(...(items.length ? items.map((it, i) => h("li", { role: "option", id: "sg" + i, "aria-selected": "false", onmousedown: (e) => { e.preventDefault(); pick(it); } },
+    h("div", { class: "l1" }, it.l1), it.l2 ? h("div", { class: "l2" }, it.l2) : null)) : [h("li", { class: "empty" }, emptyText)]));
+  sug.hidden = false; q.setAttribute("aria-expanded", "true");
+}
+function hideSuggest() { sug.hidden = true; q.setAttribute("aria-expanded", "false"); q.removeAttribute("aria-activedescendant"); }
+function moveSel(d) {
+  if (!sugItems.length) return;
+  sugIdx = (sugIdx + d + sugItems.length) % sugItems.length;
+  [...sug.children].forEach((li, i) => li.setAttribute("aria-selected", i === sugIdx ? "true" : "false"));
+  q.setAttribute("aria-activedescendant", "sg" + sugIdx);
+}
+function pick(it) {
+  hideSuggest();
+  q.value = it.l1 + (it.l2 ? ", " + it.l2 : "");
+  $("#clearQ").hidden = false;
+  q.blur();
+  checkPoint(L.latLng(it.lat, it.lng), it.l1, it.l2);
+}
+const typeahead = debounce(async () => {
+  const text = q.value.trim();
+  if (text.length < 3) return hideSuggest();
+  sugCtrl && sugCtrl.abort(); sugCtrl = new AbortController();
+  try { showSuggest(await geocode(text, sugCtrl.signal, false)); } catch (e) { if (e.name !== "AbortError") hideSuggest(); }
+}, 280);
+async function submitSearch() {
+  const text = q.value.trim(); if (!text) return;
+  if (sugIdx >= 0 && sugItems[sugIdx]) return pick(sugItems[sugIdx]);
+  sugCtrl && sugCtrl.abort(); sugCtrl = new AbortController();
+  try {
+    const res = await geocode(text, sugCtrl.signal, true);
+    res.length ? pick(res[0]) : showSuggest([], "No matching address. Try adding the city or ZIP code.");
+  } catch (e) { if (e.name !== "AbortError") toast("Address search is unavailable right now. Check your connection and try again.", true); }
+}
+q.addEventListener("input", () => { $("#clearQ").hidden = !q.value; typeahead(); });
+q.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown") { e.preventDefault(); moveSel(1); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); moveSel(-1); }
+  else if (e.key === "Enter") { e.preventDefault(); submitSearch(); }
+  else if (e.key === "Escape") hideSuggest();
+});
+q.addEventListener("focus", () => { if (isMobile() && !state.admin) setSheet("full"); });
+q.addEventListener("blur", () => setTimeout(hideSuggest, 120));
+$("#clearQ").onclick = () => { clearResult(); q.focus(); hideSuggest(); };
+
+$("#locate").onclick = () => {
+  if (!navigator.geolocation) return toast("Location isn't available on this device.", true);
+  const b = $("#locate"); b.classList.add("busy");
+  navigator.geolocation.getCurrentPosition(
+    (pos) => { b.classList.remove("busy"); checkPoint(L.latLng(pos.coords.latitude, pos.coords.longitude), "Your location"); },
+    () => { b.classList.remove("busy"); toast("Location access was blocked. Allow it in your browser settings to use this.", true); },
+    { enableHighAccuracy: true, timeout: 12000 }
+  );
+};
+
+/* ───────────────────────── Mobile bottom sheet ───────────────────────── */
+const panel = $("#panel"), handle = $("#handle");
+const SHEETS = ["peek", "half", "full"];
+function setSheet(s) { if (isMobile()) panel.dataset.sheet = s; }
+(function sheetDrag() {
+  let startY = 0, startH = 0, dragging = false, moved = false;
+  handle.addEventListener("pointerdown", (e) => { dragging = true; moved = false; startY = e.clientY; startH = panel.getBoundingClientRect().height; handle.setPointerCapture(e.pointerId); panel.classList.add("dragging"); });
+  handle.addEventListener("pointermove", (e) => {
+    if (!dragging) return; const dy = startY - e.clientY; if (Math.abs(dy) > 4) moved = true;
+    panel.style.height = Math.max(120, Math.min(innerHeight - 40, startH + dy)) + "px";
+  });
+  const end = () => {
+    if (!dragging) return; dragging = false; panel.classList.remove("dragging");
+    if (!moved) { panel.style.height = ""; panel.dataset.sheet = SHEETS[(SHEETS.indexOf(panel.dataset.sheet) + 1) % 3]; return; }
+    const hNow = panel.getBoundingClientRect().height, H = innerHeight;
+    const targets = { peek: 150, half: H * .56, full: H - 60 };
+    const best = Object.entries(targets).sort((a, b) => Math.abs(a[1] - hNow) - Math.abs(b[1] - hNow))[0][0];
+    panel.style.height = ""; panel.dataset.sheet = best;
+  };
+  handle.addEventListener("pointerup", end); handle.addEventListener("pointercancel", end);
+  handle.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); panel.dataset.sheet = SHEETS[(SHEETS.indexOf(panel.dataset.sheet) + 1) % 3]; } });
+})();
+
+/* ───────────────────────── Banner (draw / reshape guidance) ───────────────────────── */
+function showBanner(text, buttons) {
+  const b = $("#banner");
+  b.replaceChildren(h("div", { class: "txt" }, text), ...buttons.map(x => h("button", { class: "btn" + (x.primary ? " primary" : ""), onclick: x.fn }, x.label)));
+  b.hidden = false;
+}
+const hideBanner = () => { $("#banner").hidden = true; };
+
+/* ───────────────────────── GitHub storage (admin) ───────────────────────── */
+function repoInfo() {
+  const saved = LS.get("svdp.repo", null);
+  if (saved && saved.owner && saved.name) return saved;
+  const host = location.hostname;
+  if (host.endsWith(".github.io")) {
+    const owner = host.split(".")[0];
+    const seg = location.pathname.split("/").filter(Boolean)[0];
+    return { owner, name: seg && !seg.includes(".") ? seg : host, branch: CONFIG.repo.branch };
+  }
+  return Object.assign({}, CONFIG.repo);
+}
+const token = () => LS.get("svdp.token", "");
+async function gh(path, opts = {}) {
+  const r = await fetch("https://api.github.com" + path, Object.assign({}, opts, {
+    headers: Object.assign({ Accept: "application/vnd.github+json", Authorization: "Bearer " + token(), "X-GitHub-Api-Version": "2022-11-28" }, opts.headers || {})
+  }));
+  return r;
+}
+const b64encode = (s) => { let bin = ""; new TextEncoder().encode(s).forEach(b => bin += String.fromCharCode(b)); return btoa(bin); };
+const b64decode = (s) => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\s/g, "")), c => c.charCodeAt(0)));
+
+async function fetchRemote() {
+  const { owner, name, branch } = repoInfo();
+  const r = await gh(`/repos/${owner}/${name}/contents/${CONFIG.dataFile}?ref=${encodeURIComponent(branch)}&t=${Date.now()}`);
+  if (r.status === 404) return { sha: null, data: null };
+  if (r.status === 401 || r.status === 403) throw new Error("auth");
+  if (!r.ok) throw new Error("GitHub returned " + r.status);
+  const j = await r.json();
+  let text = j.content ? b64decode(j.content) : null;
+  if (!text) { const raw = await gh(`/repos/${owner}/${name}/contents/${CONFIG.dataFile}?ref=${encodeURIComponent(branch)}`, { headers: { Accept: "application/vnd.github.raw+json" } }); text = await raw.text(); }
+  return { sha: j.sha, data: JSON.parse(text) };
+}
+async function publish() {
+  const { owner, name, branch } = repoInfo();
+  const btn = $("#pubBtn"); if (btn) { btn.disabled = true; btn.textContent = "Publishing…"; }
+  try {
+    const n = features().length;
+    const body = { message: `Update conference boundaries (${n} area${n === 1 ? "" : "s"})`, content: b64encode(JSON.stringify(state.data, null, 1)), branch };
+    if (state.sha) body.sha = state.sha;
+    const r = await gh(`/repos/${owner}/${name}/contents/${CONFIG.dataFile}`, { method: "PUT", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
+    if (r.status === 409 || r.status === 422) throw new Error("Someone else published changes since you started. Export your work, then sign out and back in to get the latest version.");
+    if (r.status === 401 || r.status === 403 || r.status === 404) throw new Error("GitHub refused the update. Check that your access token can read and write this repository's contents.");
+    if (!r.ok) throw new Error("GitHub returned an error (" + r.status + "). Try again in a moment.");
+    const j = await r.json();
+    state.sha = j.content.sha; state.dirty = false; LS.del("svdp.draft");
+    toast("Published. Everyone will see the update within about a minute.");
+  } catch (e) { toast(e.message, true); }
+  renderAdmin();
+}
+
+/* ───────────────────────── Admin mode ───────────────────────── */
+function changed() { state.dirty = true; LS.set("svdp.draft", { at: Date.now(), data: state.data }); renderList(); renderAdmin(); }
+const changedQuiet = debounce(() => { state.dirty = true; LS.set("svdp.draft", { at: Date.now(), data: state.data }); renderList(); updatePubBar(); }, 250);
+
+async function signIn() {
+  const ri = repoInfo();
+  const tok = h("input", { type: "password", autocomplete: "off", placeholder: "github_pat_…", value: token() });
+  const own = h("input", { value: ri.owner || "", placeholder: "your-username" });
+  const rep = h("input", { value: ri.name || "", placeholder: "repository-name" });
+  const br = h("input", { value: ri.branch || "main" });
+  const err = h("p", { style: "color:var(--danger);margin:10px 0 0", hidden: true });
+  const autodetected = location.hostname.endsWith(".github.io");
+  const ok = await modal({
+    title: "Admin sign-in",
+    body: [
+      h("p", {}, "Paste the GitHub access token you created for this map. It's stored only on this device."),
+      h("div", { class: "form" },
+        h("label", {}, "Access token"), tok,
+        h("details", { open: !autodetected || undefined, style: "margin-top:12px" },
+          h("summary", { style: "cursor:pointer;font-size:13px;color:var(--muted)" }, "Repository " + (ri.owner ? `(${ri.owner}/${ri.name})` : "")),
+          h("div", { class: "row" }, h("div", {}, h("label", {}, "Owner"), own), h("div", {}, h("label", {}, "Repository"), rep)),
+          h("label", {}, "Branch"), br)),
+      err
+    ],
+    buttons: [{ label: "Cancel", value: false }, {
+      label: "Sign in", value: true, primary: true, before: async () => {
+        const t = tok.value.trim(); if (!t) { err.hidden = false; err.textContent = "Enter your access token."; return false; }
+        LS.set("svdp.token", t);
+        LS.set("svdp.repo", { owner: own.value.trim(), name: rep.value.trim(), branch: br.value.trim() || "main" });
+        err.hidden = false; err.style.color = "var(--muted)"; err.textContent = "Checking access…";
+        try {
+          const r = await gh(`/repos/${own.value.trim()}/${rep.value.trim()}`);
+          if (!r.ok) throw new Error(r.status === 404 ? "That repository wasn't found, or the token can't see it." : "GitHub didn't accept that token.");
+          const j = await r.json();
+          if (j.permissions && j.permissions.push === false) throw new Error("This token's account can't write to that repository.");
+          return true;
+        } catch (e) { LS.del("svdp.token"); err.style.color = "var(--danger)"; err.textContent = e.message; return false; }
+      }
+    }],
+    onOpen: () => tok.focus()
+  });
+  if (ok) enterAdmin();
+}
+
+async function enterAdmin() {
+  try {
+    loadCss(LIBS.geomanCss);
+    await loadScript(LIBS.geomanJs);
+    if (!map.pm) { map.pm = new L.PM.Map(map); }   // the map existed before the editor loaded
+    map.pm.setGlobalOptions({ snappable: true, snapDistance: 18, allowSelfIntersection: false, templineStyle: { color: "#2F4E8C", weight: 2 }, hintlineStyle: { color: "#2F4E8C", dashArray: "5 5" } });
+  } catch { return toast("The editing tools couldn't load. Check your connection and try again.", true); }
+
+  const draft = LS.get("svdp.draft", null);
+  try {
+    const remote = await fetchRemote();
+    state.sha = remote.sha;
+    if (draft && draft.data) {
+      state.data = normalize(draft.data); state.dirty = true;
+      toast("Restored your unpublished changes from " + new Date(draft.at).toLocaleString());
+    } else if (remote.data) { state.data = normalize(remote.data); state.dirty = false; }
+  } catch (e) {
+    if (e.message === "auth") { LS.del("svdp.token"); toast("Your access token no longer works. Sign in again.", true); return signIn(); }
+    return toast("Couldn't reach GitHub: " + e.message, true);
+  }
+  state.admin = true;
+  document.body.classList.add("admin");
+  $("#viewMode").hidden = true; $("#adminMode").hidden = false; $("#modeTag").hidden = false;
+  $("#footNote").textContent = "Tap an area to edit it";
+  $("#adminBtn").innerHTML = ICON.exit + "<span>Exit admin</span>";
+  clearResult(); drawLayers(); renderList(); renderHeader(); renderAdmin(); setSheet("half");
+}
+async function exitAdmin() {
+  stopShapeEdit(); map.pm && map.pm.disableDraw(); hideBanner();
+  state.admin = false; state.selected = null;
+  document.body.classList.remove("admin");
+  $("#viewMode").hidden = false; $("#adminMode").hidden = true; $("#modeTag").hidden = true;
+  $("#footNote").textContent = "Tap the map to check any spot";
+  $("#adminBtn").innerHTML = ICON.lock + "<span>Admin</span>";
+  setHighlight([]); renderList();
+  if (state.dirty) toast("Unpublished changes are saved on this device. Publish them from Admin.");
+}
+$("#adminBtn").onclick = () => state.admin ? exitAdmin() : (token() ? enterAdmin() : signIn());
+
+function updatePubBar() {
+  const bar = $("#pubBar"); if (!bar) return;
+  bar.className = "pubbar" + (state.dirty ? " dirty" : "");
+  bar.querySelector(".txt").textContent = state.dirty ? "Unpublished changes" : "Everything is published";
+  $("#pubBtn").hidden = !state.dirty; $("#discardBtn").hidden = !state.dirty;
+}
+
+function renderAdmin() {
+  if (!state.admin) return;
+  const box = $("#adminMode");
+  const pubBar = h("div", { class: "pubbar", id: "pubBar" },
+    h("span", { class: "dot" }), h("span", { class: "txt" }),
+    h("button", { class: "btn ghost", id: "discardBtn", onclick: discard }, "Discard"),
+    h("button", { class: "btn primary", id: "pubBtn", onclick: publish }, "Publish"));
+  if (state.selected && byId(state.selected)) { box.replaceChildren(pubBar, editForm(byId(state.selected))); updatePubBar(); return; }
+
+  const sorted = [...features()].sort((a, b) => a.properties.name.localeCompare(b.properties.name));
+  const m = state.data.meta;
+  const tIn = h("input", { value: m.title || "", oninput: (e) => { m.title = e.target.value; renderHeader(); changedQuiet(); } });
+  const sIn = h("input", { value: m.subtitle || "", oninput: (e) => { m.subtitle = e.target.value; renderHeader(); changedQuiet(); } });
+  const ri = repoInfo();
+  box.replaceChildren(
+    pubBar,
+    h("div", { class: "tools" },
+      h("button", { class: "btn primary", onclick: startDraw, html: ICON.plus + "<span>Draw a new area</span>" }),
+      h("button", { class: "btn", onclick: () => $("#fileIn").click(), html: ICON.up + "<span>Import file</span>" }),
+      h("button", { class: "btn", onclick: exportFile, html: ICON.down + "<span>Export</span>" })),
+    h("p", { class: "hint" }, "Import accepts GeoJSON or KML (Google Earth / My Maps). New points snap to neighboring borders so areas line up."),
+    h("div", { class: "section-h" }, h("h2", {}, "Areas"), h("span", {}, features().length ? String(features().length) : "")),
+    features().length
+      ? h("ul", { class: "list" }, sorted.map(f => h("li", { tabindex: 0, role: "button", onclick: () => selectArea(f.properties.id), onkeydown: (e) => e.key === "Enter" && selectArea(f.properties.id) },
+          h("span", { class: "sw", style: "--c:" + f.properties.color }),
+          h("div", { class: "grow" }, h("div", { class: "nm" }, f.properties.name), h("div", { class: "sub" }, [f.properties.parish, f.properties.phone].filter(Boolean).join(", ") || "No details yet")),
+          h("span", { html: ICON.edit, style: "color:var(--muted)" }))))
+      : h("div", { class: "emptystate" }, h("h3", {}, "Draw your first area"), h("p", { style: "margin:0" }, "Search for an address to move the map there, then tap “Draw a new area” and trace the boundary.")),
+    h("details", { class: "settings" },
+      h("summary", {}, "Map settings"),
+      h("div", { class: "form" },
+        h("label", {}, "Title"), tIn,
+        h("label", {}, "Subtitle"), sIn,
+        h("label", {}, "Starting view"),
+        h("button", { class: "btn", onclick: () => { m.view = { center: [+map.getCenter().lat.toFixed(5), +map.getCenter().lng.toFixed(5)], zoom: map.getZoom() }; changed(); toast("Starting view set to the current map."); } }, "Use the current map view"),
+        h("p", { class: "hint" }, m.view ? "Set. Visitors start at this view." : "Not set. Visitors start zoomed to fit all areas."),
+        h("p", { class: "hint", style: "margin-top:14px" }, `Saving to ${ri.owner}/${ri.name} (${ri.branch}).`),
+        h("button", { class: "btn danger", style: "margin-top:10px", onclick: async () => { if (await confirmDlg("Sign out?", "This removes the access token from this device. Unpublished changes stay saved here.", "Sign out", true)) { LS.del("svdp.token"); exitAdmin(); } } }, "Sign out of admin")))
+  );
+  updatePubBar();
+}
+
+function editForm(f) {
+  const p = f.properties;
+  const field = (label, key, attrs = {}) => {
+    const el = h(attrs.multi ? "textarea" : "input", Object.assign({ oninput: (e) => { p[key] = e.target.value.trim() ? e.target.value : ""; if (key === "name") state.layers.get(p.id)?.closeTooltip(); changedQuiet(); } }, attrs.multi ? {} : { value: p[key] || "" }, attrs.type ? { type: attrs.type } : {}, attrs.ph ? { placeholder: attrs.ph } : {}, attrs.id ? { id: attrs.id } : {}));
+    if (attrs.multi) el.value = p[key] || "";
+    return [h("label", {}, label), el];
+  };
+  const sw = h("div", { class: "swatches", role: "radiogroup", "aria-label": "Area color" }, PALETTE.map(c => h("button", {
+    style: "--c:" + c, "aria-label": "Color " + c, "aria-pressed": String(c === p.color),
+    onclick: (e) => { p.color = c; [...sw.children].forEach(b => b.setAttribute("aria-pressed", String(b === e.currentTarget))); state.layers.get(p.id).setStyle(style(f, true)); changedQuiet(); }
+  })));
+  return h("div", { class: "form" },
+    h("div", { class: "formhead" },
+      h("button", { class: "iconbtn", "aria-label": "Back to all areas", title: "Back to all areas", html: ICON.back, onclick: () => selectArea(null) }),
+      h("h2", {}, "Edit area")),
+    field("Conference name", "name", { id: "nameIn", ph: "St. Joseph Conference" }),
+    field("Parish", "parish", { ph: "St. Joseph Parish" }),
+    h("div", { class: "row" }, h("div", {}, field("Help line phone", "phone", { type: "tel", ph: "(555) 123-4567" })), h("div", {}, field("Email", "email", { type: "email", ph: "help@example.org" }))),
+    field("Contact person", "contact", { ph: "Optional" }),
+    field("Notes for the public", "notes", { multi: true, ph: "Hours, what help is offered, how to request a home visit…" }),
+    h("label", {}, "Color"), sw,
+    h("p", { class: "hint", style: "margin-top:16px" }, "Everything in this form is public once published. Use a conference help line rather than personal numbers."),
+    h("div", { class: "formfoot" },
+      h("button", { class: "btn", onclick: () => startShapeEdit(p.id), html: ICON.shape + "<span>Reshape boundary</span>" }),
+      h("button", { class: "btn danger", onclick: () => deleteArea(p.id), html: ICON.trash + "<span>Delete</span>" }),
+      h("button", { class: "btn primary", style: "margin-left:auto", onclick: () => selectArea(null) }, "Done"))
+  );
+}
+
+function selectArea(id, opts = {}) {
+  stopShapeEdit();
+  state.selected = id;
+  setHighlight(id ? [id] : []);
+  renderAdmin();
+  $("#scroll").scrollTop = 0;
+  if (id) {
+    setSheet("half");
+    fitTo(state.layers.get(id).getBounds());
+    if (opts.focusName) setTimeout(() => { const n = $("#nameIn"); n && (n.focus(), n.select()); }, 350);
+  }
+}
+
+function startDraw() {
+  stopShapeEdit(); selectArea(null); setSheet("peek");
+  const used = new Set(features().map(f => f.properties.color));
+  map.pm.enableDraw("Polygon", { pathOptions: { color: PALETTE.find(c => !used.has(c)) || PALETTE[features().length % PALETTE.length], fillOpacity: .15 } });
+  showBanner("Tap the map to place corner points. Tap the first point, or Finish, to close the shape.", [
+    { label: "Undo point", fn: () => { try { map.pm.Draw.Polygon._removeLastVertex(); } catch {} } },
+    { label: "Cancel", fn: () => { map.pm.disableDraw(); hideBanner(); setSheet("half"); } },
+    { label: "Finish", primary: true, fn: () => { try { map.pm.Draw.Polygon._finishShape(); } catch {} } }
+  ]);
+}
+map.on("pm:create", (e) => {
+  const geom = roundGeom(e.layer.toGeoJSON().geometry);
+  const color = e.layer.options.color;
+  e.layer.remove(); hideBanner();
+  const f = { type: "Feature", properties: { id: uid(), name: "New conference area", color, parish: "", phone: "", email: "", contact: "", notes: "" }, geometry: geom };
+  features().push(f); addLayer(f);
+  state.dirty = true; LS.set("svdp.draft", { at: Date.now(), data: state.data }); renderList();
+  selectArea(f.properties.id, { focusName: true });
+});
+
+function startShapeEdit(id) {
+  stopShapeEdit();
+  const layer = state.layers.get(id); if (!layer) return;
+  state.editingShape = id;
+  layer.pm.enable({ allowSelfIntersection: false, snappable: true, preventMarkerRemoval: false });
+  layer.on("pm:edit", onShapeEdit);
+  setSheet("peek");
+  fitTo(layer.getBounds());
+  showBanner("Drag the points to reshape. Drag a faint midpoint to add a point. Right-click or long-press a point to remove it.", [
+    { label: "Done", primary: true, fn: () => { stopShapeEdit(); setSheet("half"); } }
+  ]);
+}
+function onShapeEdit(e) {
+  const f = byId(e.layer.featureId || state.editingShape); if (!f) return;
+  f.geometry = roundGeom(e.layer.toGeoJSON().geometry); changedQuiet();
+}
+function stopShapeEdit() {
+  if (!state.editingShape) return;
+  const layer = state.layers.get(state.editingShape);
+  if (layer && layer.pm) { layer.pm.disable(); layer.off("pm:edit", onShapeEdit); }
+  state.editingShape = null; hideBanner();
+}
+async function deleteArea(id) {
+  const f = byId(id); if (!f) return;
+  if (!await confirmDlg("Delete this area?", `“${f.properties.name}” will be removed. This takes effect for everyone when you publish.`, "Delete area", true)) return;
+  stopShapeEdit();
+  state.layers.get(id)?.remove(); state.layers.delete(id);
+  state.data.features = features().filter(x => x.properties.id !== id);
+  state.selected = null; setHighlight([]); changed();
+}
+async function discard() {
+  if (!await confirmDlg("Discard unpublished changes?", "Your edits since the last publish will be removed and the published version reloaded.", "Discard changes", true)) return;
+  LS.del("svdp.draft"); state.dirty = false; state.selected = null;
+  try { const remote = await fetchRemote(); state.sha = remote.sha; state.data = normalize(remote.data); }
+  catch { await loadPublic(); }
+  drawLayers(); renderList(); renderHeader(); renderAdmin(); toast("Changes discarded.");
+}
+
+function exportFile() {
+  const blob = new Blob([JSON.stringify(state.data, null, 1)], { type: "application/geo+json" });
+  const a = h("a", { href: URL.createObjectURL(blob), download: "boundaries.geojson" });
+  document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+$("#fileIn").addEventListener("change", async (e) => {
+  const file = e.target.files[0]; e.target.value = ""; if (!file) return;
+  try {
+    const text = await file.text();
+    let gj;
+    if (/\.kml$/i.test(file.name) || /^\s*<\?xml|<kml/i.test(text.slice(0, 200))) {
+      await loadScript(LIBS.togeojson);
+      gj = toGeoJSON.kml(new DOMParser().parseFromString(text, "text/xml"));
+    } else gj = JSON.parse(text);
+    const raw = gj.type === "FeatureCollection" ? gj.features : gj.type === "Feature" ? [gj] : [{ type: "Feature", properties: {}, geometry: gj }];
+    const polys = raw.filter(f => f && f.geometry && /^(Multi)?Polygon$/.test(f.geometry.type));
+    if (!polys.length) return toast("No area shapes were found in that file. It needs polygons, not just points or lines.", true);
+    const start = features().length;
+    for (const [i, f] of polys.entries()) {
+      const pr = f.properties || {};
+      const nf = { type: "Feature", geometry: roundGeom(f.geometry), properties: {
+        id: uid(), name: String(pr.name || pr.Name || pr.NAME || pr.title || pr.PARISH || pr.parish || "Imported area " + (i + 1)),
+        color: /^#[0-9a-f]{6}$/i.test(pr.color || "") ? pr.color : PALETTE[(start + i) % PALETTE.length],
+        parish: pr.parish || "", phone: pr.phone || "", email: pr.email || "", contact: pr.contact || "", notes: pr.notes || pr.description || ""
+      } };
+      if (typeof nf.properties.notes !== "string") nf.properties.notes = "";
+      features().push(nf); addLayer(nf);
+    }
+    changed(); fitTo(allBounds(), 14);
+    toast(`Added ${polys.length} area${polys.length === 1 ? "" : "s"}. Review the names, then publish.`);
+  } catch { toast("That file couldn't be read. Use a .geojson, .json or .kml file.", true); }
+});
+
+addEventListener("beforeunload", (e) => { if (state.admin && state.dirty) { e.preventDefault(); e.returnValue = ""; } });
+
+/* ───────────────────────── Start ───────────────────────── */
+async function loadPublic() {
+  try {
+    const r = await fetch(CONFIG.dataFile + "?t=" + Date.now(), { cache: "no-store" });
+    state.data = normalize(r.ok ? await r.json() : null);
+  } catch { state.data = normalize(null); }
+}
+(async function init() {
+  await loadPublic();
+  renderHeader(); drawLayers(); renderList(); startView();
+  const addr = new URLSearchParams(location.search).get("address");
+  if (addr) { q.value = addr; $("#clearQ").hidden = false; submitSearch(); }
+  if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+})();
+</script>
+</body>
+</html>
