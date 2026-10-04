@@ -1,0 +1,16 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    // An admin is anyone whose email appears as a document in the "admins" collection.
+    function isAdmin() {
+      return request.auth != null && request.auth.token.email != null
+        && exists(/databases/$(db)/documents/admins/$(request.auth.token.email.lower()));
+    }
+    match /areas/{id}    { allow read: if true; allow write: if isAdmin(); }
+    match /settings/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /admins/{email} {
+      allow get: if request.auth != null && (request.auth.token.email.lower() == email || isAdmin());
+      allow list, create, delete: if isAdmin();
+    }
+  }
+}

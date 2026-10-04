@@ -17,6 +17,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <style>
 :root{
   --paper:#F4F6F9; --surface:#FFFFFF; --ink:#18202E; --muted:#5A6476; --line:#DCE1E9; --soft:#EEF1F6;
@@ -121,9 +122,16 @@ svg.i{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-widt
 
 /* Admin */
 .pubbar{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:var(--r-md);background:var(--soft);margin:4px 0 12px;font-size:14px}
-.pubbar.dirty{background:color-mix(in srgb,var(--gold) 16%,var(--surface))}
+.pubbar.busy{background:color-mix(in srgb,var(--gold) 16%,var(--surface))}
 .pubbar .dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
-.pubbar.dirty .dot{background:var(--gold)}
+.pubbar.busy .dot{background:var(--gold)}
+.pubbar .who{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.setupbox{margin:12px 0;padding:14px 16px;border-radius:var(--r-md);background:color-mix(in srgb,var(--gold) 14%,var(--surface));font-size:14px}
+.setupbox code{font-size:13px}
+.adminrow{display:flex;align-items:center;gap:8px;padding:8px 4px;border-bottom:1px solid var(--line);font-size:14px}
+.adminrow span{flex:1;overflow:hidden;text-overflow:ellipsis}
+.form .inline{display:flex;gap:8px;margin-top:8px}
+.form .inline input{flex:1}
 .pubbar .txt{flex:1}
 .tools{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px}
 .tools .btn.primary{grid-column:1/-1;justify-content:center;height:46px}
@@ -151,6 +159,8 @@ footer.foot button:hover{background:var(--soft);color:var(--ink)}
 
 /* Map chrome */
 .leaflet-container{font-family:var(--sans);background:var(--soft)}
+.leaflet-tile-pane{filter:saturate(.55) contrast(.95) brightness(1.02)}
+@media (prefers-color-scheme:dark){.leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) saturate(.35) brightness(.88) contrast(.9)}}
 .pin{filter:drop-shadow(0 3px 4px rgba(0,0,0,.3))}
 .leaflet-tooltip.tip{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);font-weight:500;padding:5px 9px}
 .leaflet-tooltip.tip::before{display:none}
@@ -242,6 +252,10 @@ dialog a{color:var(--marian)}
 <input type="file" id="fileIn" accept=".geojson,.json,.kml,application/geo+json,application/json,application/vnd.google-earth.kml+xml" hidden>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
 <script>
 "use strict";
 /* ───────────────────────── Configuration ─────────────────────────
@@ -250,10 +264,7 @@ dialog a{color:var(--marian)}
 const CONFIG = {
   title: "Conference Finder",
   subtitle: "Society of St. Vincent de Paul",
-  center: [39.5, -98.35], zoom: 4,          // fallback view before any areas exist
-  dataFile: "boundaries.geojson",
-  // Filled in automatically when hosted on GitHub Pages (username.github.io/repo).
-  repo: { owner: "", name: "", branch: "main" }
+  center: [39.5, -98.35], zoom: 4          // fallback view before any areas exist
 };
 const LIBS = {
   geomanCss: "https://cdn.jsdelivr.net/npm/@geoman-io/leaflet-geoman-free@2.20.2/dist/leaflet-geoman.css",
@@ -365,8 +376,8 @@ const roundGeom = (g) => JSON.parse(JSON.stringify(g, (k, v) => typeof v === "nu
 
 /* ───────────────────────── State ───────────────────────── */
 const state = {
-  data: null, layers: new Map(), admin: false, dirty: false, sha: null,
-  selected: null, marker: null, lastCheck: null, editingShape: null
+  data: null, layers: new Map(), admin: false, user: null, isAdmin: false, saving: 0,
+  selected: null, marker: null, lastCheck: null, editingShape: null, unsub: []
 };
 const features = () => state.data.features;
 const byId = (id) => features().find(f => f.properties.id === id);
@@ -385,20 +396,15 @@ function normalize(d) {
 }
 
 /* ───────────────────────── Map ───────────────────────── */
-const dark = matchMedia("(prefers-color-scheme: dark)");
 const map = L.map("map", { zoomControl: false, attributionControl: true, tapTolerance: 20 });
 L.control.zoom({ position: "topright" }).addTo(map);
 map.attributionControl.setPrefix(false);
-let tiles;
-function setTiles() {
-  tiles && tiles.remove();
-  tiles = L.tileLayer(`https://{s}.basemaps.cartocdn.com/${dark.matches ? "dark_all" : "rastertiles/voyager"}/{z}/{x}/{y}{r}.png`, {
-    subdomains: "abcd", maxZoom: 20,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-  }).addTo(map);
-  tiles.bringToBack();
-}
-setTiles(); dark.addEventListener?.("change", setTiles);
+// OpenStreetMap's standard tiles: free, no API key. Toned down with CSS to suit the app,
+// and inverted for dark mode (see .leaflet-tile-pane in the styles).
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+}).addTo(map);
 
 const isMobile = () => matchMedia("(max-width:760px)").matches;
 function fitPadding() {
@@ -671,101 +677,143 @@ function showBanner(text, buttons) {
 }
 const hideBanner = () => { $("#banner").hidden = true; };
 
-/* ───────────────────────── GitHub storage (admin) ───────────────────────── */
-function repoInfo() {
-  const saved = LS.get("svdp.repo", null);
-  if (saved && saved.owner && saved.name) return saved;
-  const host = location.hostname;
-  if (host.endsWith(".github.io")) {
-    const owner = host.split(".")[0];
-    const seg = location.pathname.split("/").filter(Boolean)[0];
-    return { owner, name: seg && !seg.includes(".") ? seg : host, branch: CONFIG.repo.branch };
-  }
-  return Object.assign({}, CONFIG.repo);
-}
-const token = () => LS.get("svdp.token", "");
-async function gh(path, opts = {}) {
-  const r = await fetch("https://api.github.com" + path, Object.assign({}, opts, {
-    headers: Object.assign({ Accept: "application/vnd.github+json", Authorization: "Bearer " + token(), "X-GitHub-Api-Version": "2022-11-28" }, opts.headers || {})
-  }));
-  return r;
-}
-const b64encode = (s) => { let bin = ""; new TextEncoder().encode(s).forEach(b => bin += String.fromCharCode(b)); return btoa(bin); };
-const b64decode = (s) => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\s/g, "")), c => c.charCodeAt(0)));
-
-async function fetchRemote() {
-  const { owner, name, branch } = repoInfo();
-  const r = await gh(`/repos/${owner}/${name}/contents/${CONFIG.dataFile}?ref=${encodeURIComponent(branch)}&t=${Date.now()}`);
-  if (r.status === 404) return { sha: null, data: null };
-  if (r.status === 401 || r.status === 403) throw new Error("auth");
-  if (!r.ok) throw new Error("GitHub returned " + r.status);
-  const j = await r.json();
-  let text = j.content ? b64decode(j.content) : null;
-  if (!text) { const raw = await gh(`/repos/${owner}/${name}/contents/${CONFIG.dataFile}?ref=${encodeURIComponent(branch)}`, { headers: { Accept: "application/vnd.github.raw+json" } }); text = await raw.text(); }
-  return { sha: j.sha, data: JSON.parse(text) };
-}
-async function publish() {
-  const { owner, name, branch } = repoInfo();
-  const btn = $("#pubBtn"); if (btn) { btn.disabled = true; btn.textContent = "Publishing…"; }
+/* ───────────────────────── Firebase (live data + admin sign-in) ───────────────────────── */
+const FB = { ok: false, db: null, auth: null };
+function fbInit() {
+  const cfg = window.FIREBASE_CONFIG;
+  if (!cfg || !cfg.apiKey || !cfg.projectId || /^PASTE/i.test(cfg.apiKey)) return false;
   try {
-    const n = features().length;
-    const body = { message: `Update conference boundaries (${n} area${n === 1 ? "" : "s"})`, content: b64encode(JSON.stringify(state.data, null, 1)), branch };
-    if (state.sha) body.sha = state.sha;
-    const r = await gh(`/repos/${owner}/${name}/contents/${CONFIG.dataFile}`, { method: "PUT", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
-    if (r.status === 409 || r.status === 422) throw new Error("Someone else published changes since you started. Export your work, then sign out and back in to get the latest version.");
-    if (r.status === 401 || r.status === 403 || r.status === 404) throw new Error("GitHub refused the update. Check that your access token can read and write this repository's contents.");
-    if (!r.ok) throw new Error("GitHub returned an error (" + r.status + "). Try again in a moment.");
-    const j = await r.json();
-    state.sha = j.content.sha; state.dirty = false; LS.del("svdp.draft");
-    toast("Published. Everyone will see the update within about a minute.");
-  } catch (e) { toast(e.message, true); }
-  renderAdmin();
+    firebase.initializeApp(cfg);
+    FB.db = firebase.firestore(); FB.auth = firebase.auth();
+    FB.db.enablePersistence({ synchronizeTabs: true }).catch(() => {});
+    FB.ok = true;
+  } catch (e) { console.error(e); return false; }
+  return true;
+}
+const areasCol = () => FB.db.collection("areas");
+const settingsDoc = () => FB.db.doc("settings/map");
+const adminsCol = () => FB.db.collection("admins");
+const emailOf = (u) => (u && u.email ? u.email.toLowerCase() : "");
+
+function featureFromDoc(d) {
+  const x = d.data() || {};
+  let geometry = null; try { geometry = JSON.parse(x.geom || "null"); } catch {}
+  if (!geometry || !/^(Multi)?Polygon$/.test(geometry.type)) return null;
+  return { type: "Feature", geometry, properties: {
+    id: d.id, name: x.name || "Unnamed area", color: x.color || PALETTE[0], parish: x.parish || "", phone: x.phone || "",
+    email: x.email || "", contact: x.contact || "", notes: x.notes || ""
+  } };
+}
+function propsToDoc(p, geometry) {
+  const out = { name: p.name || "Unnamed area", color: p.color, parish: p.parish || "", phone: p.phone || "", email: p.email || "", contact: p.contact || "", notes: p.notes || "",
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(), updatedBy: emailOf(state.user) };
+  if (geometry) out.geom = JSON.stringify(geometry);
+  return out;
+}
+
+/* Live subscriptions: everyone sees edits the moment they're saved. */
+function subscribe() {
+  state.unsub.push(areasCol().onSnapshot((snap) => {
+    const first = !state.data.loaded;
+    let touched = false;                       // did anything change that the admin panel should show?
+    snap.docChanges().forEach((ch) => {
+      const id = ch.doc.id;
+      if (ch.type === "removed") {
+        state.layers.get(id)?.remove(); state.layers.delete(id);
+        state.data.features = features().filter(f => f.properties.id !== id);
+        if (state.selected === id) { state.selected = null; stopShapeEdit(); }
+        touched = true; return;
+      }
+      const nf = featureFromDoc(ch.doc); if (!nf) return;
+      const existing = byId(id);
+      if (!existing) { features().push(nf); addLayer(nf); touched = true; return; }
+      const sameProps = JSON.stringify(existing.properties) === JSON.stringify(nf.properties);
+      const sameGeom = JSON.stringify(existing.geometry) === JSON.stringify(nf.geometry);
+      if (sameProps && sameGeom) return;       // our own write coming back, or nothing new
+      const editingForm = state.admin && state.selected === id && ch.doc.metadata.hasPendingWrites;
+      if (!sameProps && !editingForm) { Object.assign(existing.properties, nf.properties); touched = true; }
+      if (!sameGeom && state.editingShape !== id) {
+        existing.geometry = nf.geometry;
+        state.layers.get(id)?.remove(); state.layers.delete(id); addLayer(existing);
+        if (highlighted.has(id)) setHighlight([...highlighted]);
+      } else if (!sameProps) state.layers.get(id)?.setStyle(style(existing, highlighted.has(id)));
+    });
+    state.data.loaded = true;
+    renderList();
+    if (state.admin && touched) renderAdmin();
+    if (first) startView();
+    if (state.lastCheck && !state.admin) checkPoint(state.lastCheck.latlng, state.lastCheck.label, state.lastCheck.sublabel);
+  }, (err) => { console.error(err); toast("Couldn't load the map data. Check the Firebase setup and rules.", true); }));
+  state.unsub.push(settingsDoc().onSnapshot((d) => {
+    const x = d.exists ? d.data() : {};
+    const next = Object.assign({ title: CONFIG.title, subtitle: CONFIG.subtitle }, x);
+    const same = JSON.stringify(next) === JSON.stringify(state.data.meta);
+    const wasSet = !!state.data.meta.view;
+    state.data.meta = next;
+    renderHeader();
+    if (!wasSet && next.view && !state.data.loaded) startView();
+    if (state.admin && !same) renderAdmin();
+  }));
+}
+
+/* Saving helpers: every edit writes straight to Firestore. */
+function saveStart() { state.saving++; updateStatus(); }
+function saveEnd(err) {
+  state.saving = Math.max(0, state.saving - 1); updateStatus();
+  if (err) { console.error(err); toast(err.code === "permission-denied" ? "Not saved: this account isn't allowed to edit. Ask an admin to add your email." : "Not saved: " + (err.message || "connection problem"), true); }
+}
+const write = (p) => { saveStart(); return p.then(() => saveEnd()).catch(saveEnd); };
+const saveArea = (f, withGeom) => write(areasCol().doc(f.properties.id).set(propsToDoc(f.properties, withGeom ? f.geometry : null), { merge: true }));
+const saveAreaQuiet = debounce((id) => { const f = byId(id); f && saveArea(f, false); }, 600);
+const saveSettings = debounce(() => write(settingsDoc().set({ title: state.data.meta.title || "", subtitle: state.data.meta.subtitle || "", view: state.data.meta.view || null }, { merge: true })), 600);
+
+/* ───────────────────────── Sign-in ───────────────────────── */
+async function signInDialog() {
+  const em = h("input", { type: "email", autocomplete: "username", placeholder: "you@example.org", inputmode: "email" });
+  const pw = h("input", { type: "password", autocomplete: "current-password", placeholder: "Password" });
+  const err = h("p", { style: "color:var(--danger);margin:10px 0 0;font-size:14px", hidden: true });
+  const say = (m) => { err.hidden = !m; err.textContent = m || ""; };
+  const friendly = (e) => ({
+    "auth/invalid-credential": "That email or password isn't right.", "auth/wrong-password": "That password isn't right.", "auth/user-not-found": "No account with that email yet. Tap “Create account”.",
+    "auth/email-already-in-use": "An account already exists for that email. Sign in instead.", "auth/weak-password": "Use a password with at least 6 characters.", "auth/invalid-email": "Enter a valid email address.",
+    "auth/too-many-requests": "Too many attempts. Wait a few minutes and try again.", "auth/operation-not-allowed": "This sign-in method isn't enabled in Firebase yet.", "auth/popup-blocked": "The sign-in window was blocked. Allow pop-ups and try again."
+  })[e.code] || e.message || "Sign-in failed.";
+  const google = h("button", { class: "btn full", style: "margin-top:14px", onclick: async () => {
+    try { const prov = new firebase.auth.GoogleAuthProvider(); isMobile() ? await FB.auth.signInWithRedirect(prov) : await FB.auth.signInWithPopup(prov); $("#dlg").close(); } catch (e) { say(friendly(e)); }
+  } }, "Continue with Google");
+  const doAuth = (create) => async () => {
+    const e = em.value.trim().toLowerCase(), p = pw.value;
+    if (!e || !p) { say("Enter your email and password."); return false; }
+    try { create ? await FB.auth.createUserWithEmailAndPassword(e, p) : await FB.auth.signInWithEmailAndPassword(e, p); return true; }
+    catch (x) { say(friendly(x)); return false; }
+  };
+  await modal({
+    title: "Admin sign-in",
+    body: [h("p", {}, "Sign in with the email an admin has approved for editing."),
+      h("div", { class: "form" }, h("label", {}, "Email"), em, h("label", {}, "Password"), pw,
+        h("button", { class: "btn ghost", style: "margin-top:10px;padding:0 6px;height:32px;color:var(--marian)", onclick: async () => {
+          const e = em.value.trim().toLowerCase(); if (!e) return say("Enter your email first, then tap this.");
+          try { await FB.auth.sendPasswordResetEmail(e); say("Password reset email sent."); err.style.color = "var(--muted)"; } catch (x) { err.style.color = "var(--danger)"; say(friendly(x)); }
+        } }, "Forgot password?"), google), err],
+    buttons: [{ label: "Cancel", value: false }, { label: "Create account", value: true, before: doAuth(true) }, { label: "Sign in", value: true, primary: true, before: doAuth(false) }],
+    onOpen: () => em.focus()
+  });
+}
+
+async function refreshAdminStatus(user) {
+  state.user = user; state.isAdmin = false;
+  if (user && emailOf(user)) {
+    try { const d = await adminsCol().doc(emailOf(user)).get(); state.isAdmin = d.exists; } catch {}
+  }
+  if (user && !state.isAdmin) {
+    toast(`Signed in as ${emailOf(user)}, but this account isn't an admin yet. Ask an existing admin to add it.`, true);
+  }
+  if (state.user && state.isAdmin && !state.admin) enterAdmin();
+  if (!state.user && state.admin) exitAdmin();
+  $("#adminBtn").innerHTML = state.admin ? ICON.exit + "<span>Exit admin</span>" : ICON.lock + "<span>Admin</span>";
 }
 
 /* ───────────────────────── Admin mode ───────────────────────── */
-function changed() { state.dirty = true; LS.set("svdp.draft", { at: Date.now(), data: state.data }); renderList(); renderAdmin(); }
-const changedQuiet = debounce(() => { state.dirty = true; LS.set("svdp.draft", { at: Date.now(), data: state.data }); renderList(); updatePubBar(); }, 250);
-
-async function signIn() {
-  const ri = repoInfo();
-  const tok = h("input", { type: "password", autocomplete: "off", placeholder: "github_pat_…", value: token() });
-  const own = h("input", { value: ri.owner || "", placeholder: "your-username" });
-  const rep = h("input", { value: ri.name || "", placeholder: "repository-name" });
-  const br = h("input", { value: ri.branch || "main" });
-  const err = h("p", { style: "color:var(--danger);margin:10px 0 0", hidden: true });
-  const autodetected = location.hostname.endsWith(".github.io");
-  const ok = await modal({
-    title: "Admin sign-in",
-    body: [
-      h("p", {}, "Paste the GitHub access token you created for this map. It's stored only on this device."),
-      h("div", { class: "form" },
-        h("label", {}, "Access token"), tok,
-        h("details", { open: !autodetected || undefined, style: "margin-top:12px" },
-          h("summary", { style: "cursor:pointer;font-size:13px;color:var(--muted)" }, "Repository " + (ri.owner ? `(${ri.owner}/${ri.name})` : "")),
-          h("div", { class: "row" }, h("div", {}, h("label", {}, "Owner"), own), h("div", {}, h("label", {}, "Repository"), rep)),
-          h("label", {}, "Branch"), br)),
-      err
-    ],
-    buttons: [{ label: "Cancel", value: false }, {
-      label: "Sign in", value: true, primary: true, before: async () => {
-        const t = tok.value.trim(); if (!t) { err.hidden = false; err.textContent = "Enter your access token."; return false; }
-        LS.set("svdp.token", t);
-        LS.set("svdp.repo", { owner: own.value.trim(), name: rep.value.trim(), branch: br.value.trim() || "main" });
-        err.hidden = false; err.style.color = "var(--muted)"; err.textContent = "Checking access…";
-        try {
-          const r = await gh(`/repos/${own.value.trim()}/${rep.value.trim()}`);
-          if (!r.ok) throw new Error(r.status === 404 ? "That repository wasn't found, or the token can't see it." : "GitHub didn't accept that token.");
-          const j = await r.json();
-          if (j.permissions && j.permissions.push === false) throw new Error("This token's account can't write to that repository.");
-          return true;
-        } catch (e) { LS.del("svdp.token"); err.style.color = "var(--danger)"; err.textContent = e.message; return false; }
-      }
-    }],
-    onOpen: () => tok.focus()
-  });
-  if (ok) enterAdmin();
-}
-
 async function enterAdmin() {
   try {
     loadCss(LIBS.geomanCss);
@@ -773,27 +821,14 @@ async function enterAdmin() {
     if (!map.pm) { map.pm = new L.PM.Map(map); }   // the map existed before the editor loaded
     map.pm.setGlobalOptions({ snappable: true, snapDistance: 18, allowSelfIntersection: false, templineStyle: { color: "#2F4E8C", weight: 2 }, hintlineStyle: { color: "#2F4E8C", dashArray: "5 5" } });
   } catch { return toast("The editing tools couldn't load. Check your connection and try again.", true); }
-
-  const draft = LS.get("svdp.draft", null);
-  try {
-    const remote = await fetchRemote();
-    state.sha = remote.sha;
-    if (draft && draft.data) {
-      state.data = normalize(draft.data); state.dirty = true;
-      toast("Restored your unpublished changes from " + new Date(draft.at).toLocaleString());
-    } else if (remote.data) { state.data = normalize(remote.data); state.dirty = false; }
-  } catch (e) {
-    if (e.message === "auth") { LS.del("svdp.token"); toast("Your access token no longer works. Sign in again.", true); return signIn(); }
-    return toast("Couldn't reach GitHub: " + e.message, true);
-  }
   state.admin = true;
   document.body.classList.add("admin");
   $("#viewMode").hidden = true; $("#adminMode").hidden = false; $("#modeTag").hidden = false;
   $("#footNote").textContent = "Tap an area to edit it";
   $("#adminBtn").innerHTML = ICON.exit + "<span>Exit admin</span>";
-  clearResult(); drawLayers(); renderList(); renderHeader(); renderAdmin(); setSheet("half");
+  clearResult(); drawLayers(); renderList(); renderAdmin(); setSheet("half");
 }
-async function exitAdmin() {
+function exitAdmin() {
   stopShapeEdit(); map.pm && map.pm.disableDraw(); hideBanner();
   state.admin = false; state.selected = null;
   document.body.classList.remove("admin");
@@ -801,38 +836,38 @@ async function exitAdmin() {
   $("#footNote").textContent = "Tap the map to check any spot";
   $("#adminBtn").innerHTML = ICON.lock + "<span>Admin</span>";
   setHighlight([]); renderList();
-  if (state.dirty) toast("Unpublished changes are saved on this device. Publish them from Admin.");
 }
-$("#adminBtn").onclick = () => state.admin ? exitAdmin() : (token() ? enterAdmin() : signIn());
+$("#adminBtn").onclick = () => {
+  if (!FB.ok) return toast("Firebase isn't set up yet. See SETUP.md, step 2.", true);
+  if (state.admin) return exitAdmin();
+  if (state.user && state.isAdmin) return enterAdmin();
+  if (state.user) return refreshAdminStatus(state.user);
+  signInDialog();
+};
 
-function updatePubBar() {
-  const bar = $("#pubBar"); if (!bar) return;
-  bar.className = "pubbar" + (state.dirty ? " dirty" : "");
-  bar.querySelector(".txt").textContent = state.dirty ? "Unpublished changes" : "Everything is published";
-  $("#pubBtn").hidden = !state.dirty; $("#discardBtn").hidden = !state.dirty;
+function updateStatus() {
+  const bar = $("#statusBar"); if (!bar) return;
+  bar.className = "pubbar" + (state.saving ? " busy" : "");
+  bar.querySelector(".txt").textContent = state.saving ? "Saving…" : "All changes saved and live";
 }
 
 function renderAdmin() {
   if (!state.admin) return;
   const box = $("#adminMode");
-  const pubBar = h("div", { class: "pubbar", id: "pubBar" },
-    h("span", { class: "dot" }), h("span", { class: "txt" }),
-    h("button", { class: "btn ghost", id: "discardBtn", onclick: discard }, "Discard"),
-    h("button", { class: "btn primary", id: "pubBtn", onclick: publish }, "Publish"));
-  if (state.selected && byId(state.selected)) { box.replaceChildren(pubBar, editForm(byId(state.selected))); updatePubBar(); return; }
+  const statusBar = h("div", { class: "pubbar", id: "statusBar" }, h("span", { class: "dot" }), h("div", { style: "flex:1;min-width:0" }, h("div", { class: "txt" }), h("div", { class: "who" }, emailOf(state.user))));
+  if (state.selected && byId(state.selected)) { box.replaceChildren(statusBar, editForm(byId(state.selected))); updateStatus(); return; }
 
   const sorted = [...features()].sort((a, b) => a.properties.name.localeCompare(b.properties.name));
   const m = state.data.meta;
-  const tIn = h("input", { value: m.title || "", oninput: (e) => { m.title = e.target.value; renderHeader(); changedQuiet(); } });
-  const sIn = h("input", { value: m.subtitle || "", oninput: (e) => { m.subtitle = e.target.value; renderHeader(); changedQuiet(); } });
-  const ri = repoInfo();
+  const tIn = h("input", { value: m.title || "", oninput: (e) => { m.title = e.target.value; renderHeader(); saveSettings(); } });
+  const sIn = h("input", { value: m.subtitle || "", oninput: (e) => { m.subtitle = e.target.value; renderHeader(); saveSettings(); } });
   box.replaceChildren(
-    pubBar,
+    statusBar,
     h("div", { class: "tools" },
       h("button", { class: "btn primary", onclick: startDraw, html: ICON.plus + "<span>Draw a new area</span>" }),
       h("button", { class: "btn", onclick: () => $("#fileIn").click(), html: ICON.up + "<span>Import file</span>" }),
       h("button", { class: "btn", onclick: exportFile, html: ICON.down + "<span>Export</span>" })),
-    h("p", { class: "hint" }, "Import accepts GeoJSON or KML (Google Earth / My Maps). New points snap to neighboring borders so areas line up."),
+    h("p", { class: "hint" }, "Import accepts GeoJSON or KML (Google Earth / My Maps). New points snap to neighboring borders so areas line up. Edits save automatically."),
     h("div", { class: "section-h" }, h("h2", {}, "Areas"), h("span", {}, features().length ? String(features().length) : "")),
     features().length
       ? h("ul", { class: "list" }, sorted.map(f => h("li", { tabindex: 0, role: "button", onclick: () => selectArea(f.properties.id), onkeydown: (e) => e.key === "Enter" && selectArea(f.properties.id) },
@@ -846,24 +881,53 @@ function renderAdmin() {
         h("label", {}, "Title"), tIn,
         h("label", {}, "Subtitle"), sIn,
         h("label", {}, "Starting view"),
-        h("button", { class: "btn", onclick: () => { m.view = { center: [+map.getCenter().lat.toFixed(5), +map.getCenter().lng.toFixed(5)], zoom: map.getZoom() }; changed(); toast("Starting view set to the current map."); } }, "Use the current map view"),
-        h("p", { class: "hint" }, m.view ? "Set. Visitors start at this view." : "Not set. Visitors start zoomed to fit all areas."),
-        h("p", { class: "hint", style: "margin-top:14px" }, `Saving to ${ri.owner}/${ri.name} (${ri.branch}).`),
-        h("button", { class: "btn danger", style: "margin-top:10px", onclick: async () => { if (await confirmDlg("Sign out?", "This removes the access token from this device. Unpublished changes stay saved here.", "Sign out", true)) { LS.del("svdp.token"); exitAdmin(); } } }, "Sign out of admin")))
+        h("button", { class: "btn", onclick: () => { m.view = { center: [+map.getCenter().lat.toFixed(5), +map.getCenter().lng.toFixed(5)], zoom: map.getZoom() }; saveSettings(); toast("Starting view set to the current map."); } }, "Use the current map view"),
+        h("p", { class: "hint" }, m.view ? "Set. Visitors start at this view." : "Not set. Visitors start zoomed to fit all areas."))),
+    h("details", { class: "settings" },
+      h("summary", {}, "Admins"),
+      h("div", { class: "form", id: "adminsBox" }, h("p", { class: "hint" }, "Loading…"))),
+    h("details", { class: "settings" },
+      h("summary", {}, "Account"),
+      h("div", { class: "form" },
+        h("p", { class: "hint" }, "Signed in as " + emailOf(state.user)),
+        h("button", { class: "btn", style: "margin-top:10px", onclick: () => FB.auth.signOut() }, "Sign out")))
   );
-  updatePubBar();
+  updateStatus();
+  box.querySelector('details.settings:nth-of-type(2)').addEventListener("toggle", (e) => e.target.open && renderAdmins(), { once: false });
+}
+
+async function renderAdmins() {
+  const box = $("#adminsBox"); if (!box) return;
+  try {
+    const snap = await adminsCol().get();
+    const me = emailOf(state.user);
+    const addIn = h("input", { type: "email", placeholder: "name@example.org", inputmode: "email" });
+    box.replaceChildren(
+      h("p", { class: "hint", style: "margin:0 0 6px" }, "These people can edit the map once they sign in with that email."),
+      ...snap.docs.map(d => h("div", { class: "adminrow" }, h("span", {}, d.id + (d.id === me ? " (you)" : "")),
+        d.id !== me ? h("button", { class: "iconbtn", title: "Remove admin", "aria-label": "Remove " + d.id, html: ICON.close, onclick: async () => {
+          if (await confirmDlg("Remove admin?", `${d.id} will no longer be able to edit the map.`, "Remove", true)) { await write(adminsCol().doc(d.id).delete()); renderAdmins(); }
+        } }) : null)),
+      h("div", { class: "inline" }, addIn, h("button", { class: "btn primary", onclick: async () => {
+        const e = addIn.value.trim().toLowerCase(); if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) return toast("Enter a valid email address.", true);
+        await write(adminsCol().doc(e).set({ addedBy: me, addedAt: firebase.firestore.FieldValue.serverTimestamp() }));
+        toast(`${e} can now sign in and edit.`); renderAdmins();
+      } }, "Add")),
+      h("p", { class: "hint" }, "New admins create their own account with “Create account” on the sign-in screen, using this exact email.")
+    );
+  } catch (e) { box.replaceChildren(h("p", { class: "hint" }, "Couldn't load the admin list: " + (e.message || e))); }
 }
 
 function editForm(f) {
   const p = f.properties;
   const field = (label, key, attrs = {}) => {
-    const el = h(attrs.multi ? "textarea" : "input", Object.assign({ oninput: (e) => { p[key] = e.target.value.trim() ? e.target.value : ""; if (key === "name") state.layers.get(p.id)?.closeTooltip(); changedQuiet(); } }, attrs.multi ? {} : { value: p[key] || "" }, attrs.type ? { type: attrs.type } : {}, attrs.ph ? { placeholder: attrs.ph } : {}, attrs.id ? { id: attrs.id } : {}));
+    const el = h(attrs.multi ? "textarea" : "input", Object.assign({ oninput: (e) => { p[key] = e.target.value.trim() ? e.target.value : ""; if (key === "name") { state.layers.get(p.id)?.closeTooltip(); renderList(); } saveAreaQuiet(p.id); } }, attrs.multi ? {} : { value: p[key] || "" }, attrs.type ? { type: attrs.type } : {}, attrs.ph ? { placeholder: attrs.ph } : {}, attrs.id ? { id: attrs.id } : {}));
     if (attrs.multi) el.value = p[key] || "";
     return [h("label", {}, label), el];
   };
   const sw = h("div", { class: "swatches", role: "radiogroup", "aria-label": "Area color" }, PALETTE.map(c => h("button", {
     style: "--c:" + c, "aria-label": "Color " + c, "aria-pressed": String(c === p.color),
-    onclick: (e) => { p.color = c; [...sw.children].forEach(b => b.setAttribute("aria-pressed", String(b === e.currentTarget))); state.layers.get(p.id).setStyle(style(f, true)); changedQuiet(); }
+    onclick: (e) => { p.color = c; [...sw.children].forEach(b => b.setAttribute("aria-pressed", String(b === e.currentTarget))); state.layers.get(p.id).setStyle(style(f, true)); saveAreaQuiet(p.id); }
   })));
   return h("div", { class: "form" },
     h("div", { class: "formhead" },
@@ -875,7 +939,7 @@ function editForm(f) {
     field("Contact person", "contact", { ph: "Optional" }),
     field("Notes for the public", "notes", { multi: true, ph: "Hours, what help is offered, how to request a home visit…" }),
     h("label", {}, "Color"), sw,
-    h("p", { class: "hint", style: "margin-top:16px" }, "Everything in this form is public once published. Use a conference help line rather than personal numbers."),
+    h("p", { class: "hint", style: "margin-top:16px" }, "Everything in this form is visible to the public. Use a conference help line rather than personal numbers."),
     h("div", { class: "formfoot" },
       h("button", { class: "btn", onclick: () => startShapeEdit(p.id), html: ICON.shape + "<span>Reshape boundary</span>" }),
       h("button", { class: "btn danger", onclick: () => deleteArea(p.id), html: ICON.trash + "<span>Delete</span>" }),
@@ -910,9 +974,9 @@ map.on("pm:create", (e) => {
   const geom = roundGeom(e.layer.toGeoJSON().geometry);
   const color = e.layer.options.color;
   e.layer.remove(); hideBanner();
-  const f = { type: "Feature", properties: { id: uid(), name: "New conference area", color, parish: "", phone: "", email: "", contact: "", notes: "" }, geometry: geom };
-  features().push(f); addLayer(f);
-  state.dirty = true; LS.set("svdp.draft", { at: Date.now(), data: state.data }); renderList();
+  const f = { type: "Feature", properties: { id: areasCol().doc().id, name: "New conference area", color, parish: "", phone: "", email: "", contact: "", notes: "" }, geometry: geom };
+  features().push(f); addLayer(f); renderList();
+  saveArea(f, true);
   selectArea(f.properties.id, { focusName: true });
 });
 
@@ -930,32 +994,28 @@ function startShapeEdit(id) {
 }
 function onShapeEdit(e) {
   const f = byId(e.layer.featureId || state.editingShape); if (!f) return;
-  f.geometry = roundGeom(e.layer.toGeoJSON().geometry); changedQuiet();
+  f.geometry = roundGeom(e.layer.toGeoJSON().geometry); f._geomDirty = true;
 }
 function stopShapeEdit() {
   if (!state.editingShape) return;
-  const layer = state.layers.get(state.editingShape);
+  const id = state.editingShape, layer = state.layers.get(id);
   if (layer && layer.pm) { layer.pm.disable(); layer.off("pm:edit", onShapeEdit); }
   state.editingShape = null; hideBanner();
+  const f = byId(id); if (f && f._geomDirty) { delete f._geomDirty; saveArea(f, true); }
 }
 async function deleteArea(id) {
   const f = byId(id); if (!f) return;
-  if (!await confirmDlg("Delete this area?", `“${f.properties.name}” will be removed. This takes effect for everyone when you publish.`, "Delete area", true)) return;
+  if (!await confirmDlg("Delete this area?", `“${f.properties.name}” will be removed for everyone right away.`, "Delete area", true)) return;
   stopShapeEdit();
   state.layers.get(id)?.remove(); state.layers.delete(id);
   state.data.features = features().filter(x => x.properties.id !== id);
-  state.selected = null; setHighlight([]); changed();
-}
-async function discard() {
-  if (!await confirmDlg("Discard unpublished changes?", "Your edits since the last publish will be removed and the published version reloaded.", "Discard changes", true)) return;
-  LS.del("svdp.draft"); state.dirty = false; state.selected = null;
-  try { const remote = await fetchRemote(); state.sha = remote.sha; state.data = normalize(remote.data); }
-  catch { await loadPublic(); }
-  drawLayers(); renderList(); renderHeader(); renderAdmin(); toast("Changes discarded.");
+  state.selected = null; setHighlight([]); renderList(); renderAdmin();
+  write(areasCol().doc(id).delete());
 }
 
 function exportFile() {
-  const blob = new Blob([JSON.stringify(state.data, null, 1)], { type: "application/geo+json" });
+  const out = { type: "FeatureCollection", meta: state.data.meta, features: features().map(f => ({ type: "Feature", properties: f.properties, geometry: f.geometry })) };
+  const blob = new Blob([JSON.stringify(out, null, 1)], { type: "application/geo+json" });
   const a = h("a", { href: URL.createObjectURL(blob), download: "boundaries.geojson" });
   document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
@@ -971,34 +1031,38 @@ $("#fileIn").addEventListener("change", async (e) => {
     const raw = gj.type === "FeatureCollection" ? gj.features : gj.type === "Feature" ? [gj] : [{ type: "Feature", properties: {}, geometry: gj }];
     const polys = raw.filter(f => f && f.geometry && /^(Multi)?Polygon$/.test(f.geometry.type));
     if (!polys.length) return toast("No area shapes were found in that file. It needs polygons, not just points or lines.", true);
+    if (!await confirmDlg("Import " + polys.length + " area" + (polys.length === 1 ? "" : "s") + "?", "They'll be added to the map for everyone right away. You can rename or delete them afterwards.", "Import")) return;
     const start = features().length;
+    const batch = FB.db.batch();
     for (const [i, f] of polys.entries()) {
       const pr = f.properties || {};
       const nf = { type: "Feature", geometry: roundGeom(f.geometry), properties: {
-        id: uid(), name: String(pr.name || pr.Name || pr.NAME || pr.title || pr.PARISH || pr.parish || "Imported area " + (i + 1)),
+        id: areasCol().doc().id, name: String(pr.name || pr.Name || pr.NAME || pr.title || pr.PARISH || pr.parish || "Imported area " + (i + 1)),
         color: /^#[0-9a-f]{6}$/i.test(pr.color || "") ? pr.color : PALETTE[(start + i) % PALETTE.length],
-        parish: pr.parish || "", phone: pr.phone || "", email: pr.email || "", contact: pr.contact || "", notes: pr.notes || pr.description || ""
+        parish: pr.parish || "", phone: pr.phone || "", email: pr.email || "", contact: pr.contact || "", notes: typeof (pr.notes || pr.description) === "string" ? (pr.notes || pr.description) : ""
       } };
-      if (typeof nf.properties.notes !== "string") nf.properties.notes = "";
       features().push(nf); addLayer(nf);
+      batch.set(areasCol().doc(nf.properties.id), propsToDoc(nf.properties, nf.geometry));
     }
-    changed(); fitTo(allBounds(), 14);
-    toast(`Added ${polys.length} area${polys.length === 1 ? "" : "s"}. Review the names, then publish.`);
-  } catch { toast("That file couldn't be read. Use a .geojson, .json or .kml file.", true); }
+    renderList(); renderAdmin(); fitTo(allBounds(), 14);
+    await write(batch.commit());
+    toast(`Added ${polys.length} area${polys.length === 1 ? "" : "s"}. Review the names and details.`);
+  } catch (err) { console.error(err); toast("That file couldn't be read. Use a .geojson, .json or .kml file.", true); }
 });
 
-addEventListener("beforeunload", (e) => { if (state.admin && state.dirty) { e.preventDefault(); e.returnValue = ""; } });
-
 /* ───────────────────────── Start ───────────────────────── */
-async function loadPublic() {
-  try {
-    const r = await fetch(CONFIG.dataFile + "?t=" + Date.now(), { cache: "no-store" });
-    state.data = normalize(r.ok ? await r.json() : null);
-  } catch { state.data = normalize(null); }
-}
-(async function init() {
-  await loadPublic();
-  renderHeader(); drawLayers(); renderList(); startView();
+(function init() {
+  state.data = normalize(null);
+  renderHeader(); renderList();
+  if (!fbInit()) {
+    map.setView(CONFIG.center, CONFIG.zoom);
+    $("#result").replaceChildren(h("div", { class: "setupbox" }, h("b", {}, "One step left: connect Firebase."), " Open ", h("code", {}, "firebase-config.js"), " and paste in your project's config. SETUP.md walks through it."));
+  } else {
+    subscribe();
+    FB.auth.onAuthStateChanged(refreshAdminStatus);
+    FB.auth.getRedirectResult().catch(() => {});
+    setTimeout(() => { if (!state.data.loaded) startView(); }, 2500);   // offline or slow: don't leave a blank map
+  }
   const addr = new URLSearchParams(location.search).get("address");
   if (addr) { q.value = addr; $("#clearQ").hidden = false; submitSearch(); }
   if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
