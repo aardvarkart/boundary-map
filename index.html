@@ -570,15 +570,23 @@ function searchBox() {   // limit results to the area the map covers (padded), s
   const b = features().length ? allBounds().pad(.6) : null;
   return b && b.isValid() ? `&bbox=${b.getWest().toFixed(3)},${b.getSouth().toFixed(3)},${b.getEast().toFixed(3)},${b.getNorth().toFixed(3)}` : "";
 }
-async function censusGeocode(text, signal) {   // exact house-number positions for US addresses
-  const r = await fetch(`https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?benchmark=Public_AR_Current&format=json&address=${encodeURIComponent(text)}`, { signal });
-  if (!r.ok) throw new Error("census " + r.status);
-  const m = ((await r.json()).result || {}).addressMatches || [];
-  if (!m.length) return null;
-  const a = m[0].addressComponents || {}, street = [a.preDirection, a.streetName, a.suffixType, a.suffixDirection].filter(Boolean).join(" ");
-  const l1 = (m[0].matchedAddress || street).split(",")[0].trim().replace(/\w\S*/g, w => w[0] + w.slice(1).toLowerCase());
-  return { l1,
-           l2: [a.city && a.city[0] + a.city.slice(1).toLowerCase(), [a.state, a.zip].filter(Boolean).join(" ")].filter(Boolean).join(", "), lat: m[0].coordinates.y, lng: m[0].coordinates.x, exact: true };
+function censusGeocode(text) {   // exact house-number positions for US addresses (JSONP: the service blocks plain fetches)
+  return new Promise((resolve, reject) => {
+    const cb = "__cg" + Date.now().toString(36), el = h("script");
+    const done = (fn, v) => { delete window[cb]; el.remove(); clearTimeout(t); fn(v); };
+    const t = setTimeout(() => done(reject, new Error("timeout")), 8000);
+    window[cb] = (d) => {
+      const m = ((d || {}).result || {}).addressMatches || [];
+      if (!m.length) return done(resolve, null);
+      const a = m[0].addressComponents || {};
+      const title = (x) => String(x || "").toLowerCase().replace(/\b\w/g, c => c.toUpperCase()).replace(/\b(Ne|Nw|Se|Sw|N|S|E|W)\b/g, c => c.toUpperCase());
+      done(resolve, { l1: title((m[0].matchedAddress || "").split(",")[0]), l2: [title(a.city), [a.state, a.zip].filter(Boolean).join(" ")].filter(Boolean).join(", "),
+        lat: m[0].coordinates.y, lng: m[0].coordinates.x, exact: true });
+    };
+    el.onerror = () => done(reject, new Error("unavailable"));
+    el.src = `https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?benchmark=Public_AR_Current&format=jsonp&callback=${cb}&address=${encodeURIComponent(text)}`;
+    document.head.append(el);
+  });
 }
 function fromPhoton(f) {
   const p = f.properties || {};
@@ -607,11 +615,12 @@ async function geocode(text, signal, allowFallback) {
   if (!r.ok) throw new Error("Address search is unavailable right now.");
   return (await r.json()).map(fromNominatim);
 }
+const typedNumber = () => (q.value.trim().match(/^\d+[a-z]?\b/i) || [])[0] || "";
 function showSuggest(items, emptyText) {
   sugItems = items; sugIdx = -1;
   if (!items.length && !emptyText) return hideSuggest();
   sug.replaceChildren(...(items.length ? items.map((it, i) => h("li", { role: "option", id: "sg" + i, "aria-selected": "false", onpointerdown: (e) => { e.preventDefault(); pick(it); } },
-    h("div", { class: "l1" }, it.l1), it.l2 ? h("div", { class: "l2" }, it.l2) : null)) : [h("li", { class: "empty" }, emptyText)]));
+    h("div", { class: "l1" }, (!it.hasNumber && !it.exact && typedNumber() && /^[a-z]/i.test(it.l1) ? typedNumber() + " " : "") + it.l1), it.l2 ? h("div", { class: "l2" }, it.l2) : null)) : [h("li", { class: "empty" }, emptyText)]));
   sug.hidden = false; q.setAttribute("aria-expanded", "true");
 }
 function hideSuggest() { sug.hidden = true; q.setAttribute("aria-expanded", "false"); q.removeAttribute("aria-activedescendant"); }
@@ -644,7 +653,8 @@ async function submitSearch() {
   if (sugIdx >= 0 && sugItems[sugIdx]) return pick(sugItems[sugIdx]);
   sugCtrl && sugCtrl.abort(); sugCtrl = new AbortController();
   if (/^\d+[a-z]?\s+\S/i.test(text)) {   // looks like a US street address: try the exact geocoder first
-    try { const c = await censusGeocode(text, sugCtrl.signal); if (c) return pick(c); } catch (e) { if (e.name === "AbortError") return; }
+    const ctx = !text.includes(",") && sugItems[0] && sugItems[0].l2 ? text + ", " + sugItems[0].l2 : text;
+    try { const c = await censusGeocode(ctx); if (c) return pick(c); } catch {}
   }
   try {
     const res = await geocode(text, sugCtrl.signal, true);
