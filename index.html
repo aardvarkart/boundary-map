@@ -193,7 +193,8 @@ dialog a{color:var(--marian)}
   #panel[data-sheet="half"]{--h:56%}
   #panel[data-sheet="full"]{--h:calc(100% - 52px - env(safe-area-inset-top))}
   #panel.dragging{transition:none}
-  .handle{display:block;padding:8px 0 2px;cursor:grab;touch-action:none}
+  #sheetHead{touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none}
+  .handle{display:block;padding:8px 0 2px}
   .handle span{display:block;margin:0 auto;width:40px;height:5px;border-radius:3px;background:var(--line)}
   .brand{padding:6px 18px 10px}
   .brand .mark{width:32px;height:32px;border-radius:9px}
@@ -210,6 +211,7 @@ dialog a{color:var(--marian)}
 <body>
 <div id="app">
   <aside id="panel" data-sheet="peek" aria-label="Search and results">
+    <div id="sheetHead">
     <div class="handle" id="handle" role="button" aria-label="Resize panel" tabindex="0"><span></span></div>
     <header class="brand">
       <div class="mark" aria-hidden="true">
@@ -221,6 +223,7 @@ dialog a{color:var(--marian)}
       </div>
       <span class="mode" id="modeTag" hidden>Editing</span>
     </header>
+    </div>
     <div class="search">
       <label for="q" class="sr">Search an address</label>
       <div class="field">
@@ -459,7 +462,7 @@ map.on("click", (e) => {
 });
 
 /* ───────────────────────── Lookup & results ───────────────────────── */
-function checkPoint(latlng, label, sublabel) {
+function checkPoint(latlng, label, sublabel, silent) {
   const pt = [latlng.lng, latlng.lat];
   const hits = features().filter(f => contains(f.geometry, pt));
   let nearest = null;
@@ -470,6 +473,7 @@ function checkPoint(latlng, label, sublabel) {
   placeMarker(latlng);
   setHighlight(hits.map(f => f.properties.id));
   renderResult({ label, sublabel, hits, nearest });
+  if (silent) return;
   if (!state.admin) setSheet("half");
   const b = L.latLngBounds([latlng]);
   if (map.getZoom() < 14 || !map.getBounds().pad(-.15).contains(latlng)) {
@@ -562,12 +566,26 @@ const q = $("#q"), sug = $("#suggest");
 let sugItems = [], sugIdx = -1, sugCtrl = null;
 
 function biasCenter() { const b = features().length ? allBounds() : null; return b && b.isValid() ? b.getCenter() : map.getCenter(); }
+function searchBox() {   // limit results to the area the map covers (padded), so "Main St" means the local one
+  const b = features().length ? allBounds().pad(.6) : null;
+  return b && b.isValid() ? `&bbox=${b.getWest().toFixed(3)},${b.getSouth().toFixed(3)},${b.getEast().toFixed(3)},${b.getNorth().toFixed(3)}` : "";
+}
+async function censusGeocode(text, signal) {   // exact house-number positions for US addresses
+  const r = await fetch(`https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?benchmark=Public_AR_Current&format=json&address=${encodeURIComponent(text)}`, { signal });
+  if (!r.ok) throw new Error("census " + r.status);
+  const m = ((await r.json()).result || {}).addressMatches || [];
+  if (!m.length) return null;
+  const a = m[0].addressComponents || {}, street = [a.preDirection, a.streetName, a.suffixType, a.suffixDirection].filter(Boolean).join(" ");
+  const l1 = (m[0].matchedAddress || street).split(",")[0].trim().replace(/\w\S*/g, w => w[0] + w.slice(1).toLowerCase());
+  return { l1,
+           l2: [a.city && a.city[0] + a.city.slice(1).toLowerCase(), [a.state, a.zip].filter(Boolean).join(" ")].filter(Boolean).join(", "), lat: m[0].coordinates.y, lng: m[0].coordinates.x, exact: true };
+}
 function fromPhoton(f) {
   const p = f.properties || {};
   const street = [p.housenumber, p.street].filter(Boolean).join(" ");
   const l1 = street || p.name || [p.city, p.state].filter(Boolean).join(", ");
   const l2 = [p.name && street ? p.name : null, p.city || p.county, [p.state, p.postcode].filter(Boolean).join(" "), p.countrycode && p.countrycode !== "US" ? p.country : null].filter(Boolean).filter(x => x !== l1).join(", ");
-  return { l1, l2, lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0] };
+  return { l1, l2, lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0], hasNumber: !!p.housenumber };
 }
 function fromNominatim(r) {
   const a = r.address || {};
@@ -579,7 +597,7 @@ function fromNominatim(r) {
 async function geocode(text, signal, allowFallback) {
   const c = biasCenter();
   try {
-    const r = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(text)}&limit=6&lang=en&lat=${c.lat.toFixed(4)}&lon=${c.lng.toFixed(4)}`, { signal });
+    const r = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(text)}&limit=6&lang=en&lat=${c.lat.toFixed(4)}&lon=${c.lng.toFixed(4)}&zoom=12&location_bias_scale=0.5${searchBox()}`, { signal });
     if (!r.ok) throw new Error("photon " + r.status);
     const j = await r.json();
     const out = (j.features || []).map(fromPhoton);
@@ -592,7 +610,7 @@ async function geocode(text, signal, allowFallback) {
 function showSuggest(items, emptyText) {
   sugItems = items; sugIdx = -1;
   if (!items.length && !emptyText) return hideSuggest();
-  sug.replaceChildren(...(items.length ? items.map((it, i) => h("li", { role: "option", id: "sg" + i, "aria-selected": "false", onmousedown: (e) => { e.preventDefault(); pick(it); } },
+  sug.replaceChildren(...(items.length ? items.map((it, i) => h("li", { role: "option", id: "sg" + i, "aria-selected": "false", onpointerdown: (e) => { e.preventDefault(); pick(it); } },
     h("div", { class: "l1" }, it.l1), it.l2 ? h("div", { class: "l2" }, it.l2) : null)) : [h("li", { class: "empty" }, emptyText)]));
   sug.hidden = false; q.setAttribute("aria-expanded", "true");
 }
@@ -603,11 +621,16 @@ function moveSel(d) {
   [...sug.children].forEach((li, i) => li.setAttribute("aria-selected", i === sugIdx ? "true" : "false"));
   q.setAttribute("aria-activedescendant", "sg" + sugIdx);
 }
-function pick(it) {
+async function pick(it) {
   hideSuggest();
+  const typed = q.value.trim(), num = (typed.match(/^\d+[a-z]?\b/i) || [])[0];
   q.value = it.l1 + (it.l2 ? ", " + it.l2 : "");
   $("#clearQ").hidden = false;
   q.blur();
+  // The person typed a house number but the suggestion is only street-level: look up the exact spot.
+  if (num && !it.hasNumber && !it.exact && /^[a-z]/i.test(it.l1)) {
+    try { const c = await censusGeocode(`${num} ${it.l1}, ${it.l2}`); if (c) { q.value = c.l1 + (c.l2 ? ", " + c.l2 : ""); return checkPoint(L.latLng(c.lat, c.lng), c.l1, c.l2); } } catch {}
+  }
   checkPoint(L.latLng(it.lat, it.lng), it.l1, it.l2);
 }
 const typeahead = debounce(async () => {
@@ -620,6 +643,9 @@ async function submitSearch() {
   const text = q.value.trim(); if (!text) return;
   if (sugIdx >= 0 && sugItems[sugIdx]) return pick(sugItems[sugIdx]);
   sugCtrl && sugCtrl.abort(); sugCtrl = new AbortController();
+  if (/^\d+[a-z]?\s+\S/i.test(text)) {   // looks like a US street address: try the exact geocoder first
+    try { const c = await censusGeocode(text, sugCtrl.signal); if (c) return pick(c); } catch (e) { if (e.name === "AbortError") return; }
+  }
   try {
     const res = await geocode(text, sugCtrl.signal, true);
     res.length ? pick(res[0]) : showSuggest([], "No matching address. Try adding the city or ZIP code.");
@@ -647,7 +673,7 @@ $("#locate").onclick = () => {
 };
 
 /* ───────────────────────── Mobile bottom sheet ───────────────────────── */
-const panel = $("#panel"), handle = $("#handle");
+const panel = $("#panel"), handle = $("#sheetHead");
 const SHEETS = ["peek", "half", "full"];
 function setSheet(s) { if (isMobile()) panel.dataset.sheet = s; }
 (function sheetDrag() {
@@ -659,14 +685,14 @@ function setSheet(s) { if (isMobile()) panel.dataset.sheet = s; }
   });
   const end = () => {
     if (!dragging) return; dragging = false; panel.classList.remove("dragging");
-    if (!moved) { panel.style.height = ""; panel.dataset.sheet = SHEETS[(SHEETS.indexOf(panel.dataset.sheet) + 1) % 3]; return; }
+    if (!moved) { panel.style.height = ""; panel.dataset.sheet = { peek: "half", half: "full", full: "half" }[panel.dataset.sheet] || "half"; return; }
     const hNow = panel.getBoundingClientRect().height, H = innerHeight;
     const targets = { peek: 150, half: H * .56, full: H - 60 };
     const best = Object.entries(targets).sort((a, b) => Math.abs(a[1] - hNow) - Math.abs(b[1] - hNow))[0][0];
     panel.style.height = ""; panel.dataset.sheet = best;
   };
   handle.addEventListener("pointerup", end); handle.addEventListener("pointercancel", end);
-  handle.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); panel.dataset.sheet = SHEETS[(SHEETS.indexOf(panel.dataset.sheet) + 1) % 3]; } });
+  $("#handle").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); panel.dataset.sheet = SHEETS[(SHEETS.indexOf(panel.dataset.sheet) + 1) % 3]; } });
 })();
 
 /* ───────────────────────── Banner (draw / reshape guidance) ───────────────────────── */
@@ -742,7 +768,7 @@ function subscribe() {
     renderList();
     if (state.admin && touched) renderAdmin();
     if (first) startView();
-    if (state.lastCheck && !state.admin) checkPoint(state.lastCheck.latlng, state.lastCheck.label, state.lastCheck.sublabel);
+    if (state.lastCheck && !state.admin) checkPoint(state.lastCheck.latlng, state.lastCheck.label, state.lastCheck.sublabel, true);
   }, (err) => { console.error(err); toast("Couldn't load the map data. Check the Firebase setup and rules.", true); }));
   state.unsub.push(settingsDoc().onSnapshot((d) => {
     const x = d.exists ? d.data() : {};
@@ -1029,9 +1055,24 @@ $("#fileIn").addEventListener("change", async (e) => {
       gj = toGeoJSON.kml(new DOMParser().parseFromString(text, "text/xml"));
     } else gj = JSON.parse(text);
     const raw = gj.type === "FeatureCollection" ? gj.features : gj.type === "Feature" ? [gj] : [{ type: "Feature", properties: {}, geometry: gj }];
-    const polys = raw.filter(f => f && f.geometry && /^(Multi)?Polygon$/.test(f.geometry.type));
-    if (!polys.length) return toast("No area shapes were found in that file. It needs polygons, not just points or lines.", true);
-    if (!await confirmDlg("Import " + polys.length + " area" + (polys.length === 1 ? "" : "s") + "?", "They'll be added to the map for everyone right away. You can rename or delete them afterwards.", "Import")) return;
+    // Outlines drawn as lines (common in Google My Maps) are closed into areas.
+    const lineToPoly = (g) => {
+      const rings = g.type === "LineString" ? [g.coordinates] : g.coordinates;
+      const ok = rings.map(r => r.map(c => [c[0], c[1]])).filter(r => r.length >= 3).map(r => {
+        const [a, b] = [r[0], r[r.length - 1]];
+        return (a[0] === b[0] && a[1] === b[1]) ? r : [...r, a];
+      });
+      if (!ok.length) return null;
+      return ok.length === 1 ? { type: "Polygon", coordinates: [ok[0]] } : { type: "MultiPolygon", coordinates: ok.map(r => [r]) };
+    };
+    let converted = 0;
+    const polys = raw.filter(f => f && f.geometry).map(f => {
+      if (/^(Multi)?Polygon$/.test(f.geometry.type)) return f;
+      if (/^(Multi)?LineString$/.test(f.geometry.type)) { const g = lineToPoly(f.geometry); if (g) { converted++; return { type: "Feature", properties: f.properties || {}, geometry: g }; } }
+      return null;
+    }).filter(Boolean);
+    if (!polys.length) return toast("No area shapes were found in that file. It needs shapes or outlines, not just points.", true);
+    if (!await confirmDlg("Import " + polys.length + " area" + (polys.length === 1 ? "" : "s") + "?", (converted ? converted + " of them were drawn as outlines and will be closed into areas. " : "") + "They'll be added to the map for everyone right away. You can rename or delete them afterwards.", "Import")) return;
     const start = features().length;
     const batch = FB.db.batch();
     for (const [i, f] of polys.entries()) {

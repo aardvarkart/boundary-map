@@ -1,5 +1,5 @@
 // Offline support: the app shell and libraries are cached; the Firebase SDK keeps data in sync on its own.
-const VERSION = "cf-v3";
+const VERSION = "cf-v5";
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./firebase-config.js", "./icons/icon-192.png", "./icons/icon-512.png"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", (e) => {
