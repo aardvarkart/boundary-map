@@ -465,14 +465,17 @@ map.on("click", (e) => {
 function checkPoint(latlng, label, sublabel, silent) {
   const pt = [latlng.lng, latlng.lat];
   const hits = features().filter(f => contains(f.geometry, pt));
-  let nearest = null;
+  let nearest = null, borderline = [];
   if (!hits.length && features().length) {
     nearest = features().map(f => ({ f, d: distanceTo(f.geometry, pt) })).sort((a, b) => a.d - b.d)[0];
+  } else if (hits.length === 1) {
+    // Pins land on the street centerline. If that's within ~35 m of a neighboring area, the address may be on the dividing street.
+    borderline = features().filter(f => f !== hits[0] && distanceTo(f.geometry, pt) < 35);
   }
   state.lastCheck = { latlng, label, sublabel };
   placeMarker(latlng);
   setHighlight(hits.map(f => f.properties.id));
-  renderResult({ label, sublabel, hits, nearest });
+  renderResult({ label, sublabel, hits, nearest, borderline });
   if (silent) return;
   if (!state.admin) setSheet("half");
   const b = L.latLngBounds([latlng]);
@@ -498,7 +501,7 @@ function conferenceBlock(f, lead) {
   );
 }
 
-function renderResult({ label, sublabel, hits, nearest }) {
+function renderResult({ label, sublabel, hits, nearest, borderline = [] }) {
   const box = $("#result");
   const where = h("div", { class: "where" },
     h("span", { html: ICON.pin }),
@@ -509,7 +512,9 @@ function renderResult({ label, sublabel, hits, nearest }) {
   if (!features().length) {
     body = h("div", { class: "miss" }, h("h3", {}, "No areas set up yet"), h("p", {}, "Conference boundaries haven't been added. An admin can draw them from the Admin button below."));
   } else if (hits.length === 1) {
-    body = conferenceBlock(hits[0], "This address is served by");
+    body = [conferenceBlock(hits[0], "This address is served by")];
+    if (borderline.length) body.push(h("p", { class: "warn" }, `This address is right on the line with ${borderline.map(f => f.properties.name).join(" and ")}. Depending on which side of the street it's on, that conference may serve it instead.`),
+      ...borderline.map(f => conferenceBlock(f)));
   } else if (hits.length > 1) {
     body = [h("p", { class: "warn" }, `This spot falls inside ${hits.length} overlapping areas. An admin may want to adjust these boundaries.`), hits.map(f => conferenceBlock(f))];
   } else {
@@ -628,7 +633,7 @@ function showSuggest(items, emptyText) {
   sugItems = items; sugIdx = -1;
   if (!items.length && !emptyText) return hideSuggest();
   sug.replaceChildren(...(items.length ? items.map((it, i) => h("li", { role: "option", id: "sg" + i, "aria-selected": "false", onpointerdown: (e) => { e.preventDefault(); pick(it); } },
-    h("div", { class: "l1" }, (!it.hasNumber && !it.exact && typedNumber() && /^[a-z]/i.test(it.l1) ? typedNumber() + " " : "") + it.l1), it.l2 ? h("div", { class: "l2" }, it.l2) : null)) : [h("li", { class: "empty" }, emptyText)]));
+    h("div", { class: "l1" }, (!it.hasNumber && !it.exact && typedNumber() ? typedNumber() + " " : "") + it.l1), it.l2 ? h("div", { class: "l2" }, it.l2) : null)) : [h("li", { class: "empty" }, emptyText)]));
   sug.hidden = false; q.setAttribute("aria-expanded", "true");
 }
 function hideSuggest() { sug.hidden = true; q.setAttribute("aria-expanded", "false"); q.removeAttribute("aria-activedescendant"); }
