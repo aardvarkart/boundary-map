@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Conference Finder</title>
 <meta name="description" content="Find which St. Vincent de Paul conference serves an address.">
 <meta name="theme-color" content="#2F4E8C">
@@ -604,11 +604,19 @@ function fromNominatim(r) {
 }
 async function geocode(text, signal, allowFallback) {
   const c = biasCenter();
+  const num = (text.match(/^\d+[a-z]?\b/i) || [])[0];
+  const streetQuery = num ? text.slice(num.length).trim() : text;        // "2600 5th Ave N" → streets named "5th Ave N"
   try {
-    const r = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(text)}&limit=6&lang=en&lat=${c.lat.toFixed(4)}&lon=${c.lng.toFixed(4)}&zoom=12&location_bias_scale=0.5${searchBox()}`, { signal });
+    const r = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(streetQuery || text)}&limit=10&lang=en&lat=${c.lat.toFixed(4)}&lon=${c.lng.toFixed(4)}&zoom=12&location_bias_scale=0.5${searchBox()}${num ? "&osm_tag=highway" : ""}`, { signal });
     if (!r.ok) throw new Error("photon " + r.status);
     const j = await r.json();
-    const out = (j.features || []).map(fromPhoton);
+    let out = (j.features || []).map(fromPhoton);
+    if (num) {   // one entry per street + city; the exact house position comes from the address geocoder on pick
+      const seen = new Set();
+      out = out.filter(o => { const k = (o.l1 + "|" + o.l2.split(",")[0]).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; })
+               .map(o => Object.assign(o, { l2: o.l2.replace(/\s\d{5}(-\d{4})?$/, ""), hasNumber: false }));
+    }
+    out = out.slice(0, 6);
     if (out.length || !allowFallback) return out;
   } catch (e) { if (e.name === "AbortError" || !allowFallback) throw e; }
   const r = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=5&q=${encodeURIComponent(text)}`, { signal });
@@ -637,8 +645,10 @@ async function pick(it) {
   $("#clearQ").hidden = false;
   q.blur();
   // The person typed a house number but the suggestion is only street-level: look up the exact spot.
-  if (num && !it.hasNumber && !it.exact && /^[a-z]/i.test(it.l1)) {
-    try { const c = await censusGeocode(`${num} ${it.l1}, ${it.l2}`); if (c) { q.value = c.l1 + (c.l2 ? ", " + c.l2 : ""); return checkPoint(L.latLng(c.lat, c.lng), c.l1, c.l2); } } catch {}
+  if (num && !it.exact && (!it.hasNumber || !it.l1.toLowerCase().startsWith(num.toLowerCase() + " "))) {
+    const street = it.hasNumber ? it.l1.replace(/^\S+\s+/, "") : it.l1;
+    try { const c = await censusGeocode(`${num} ${street}, ${it.l2}`); if (c) { q.value = c.l1 + (c.l2 ? ", " + c.l2 : ""); return checkPoint(L.latLng(c.lat, c.lng), c.l1, c.l2); } } catch {}
+    toast("Couldn't pin that exact house number; showing the street instead.");
   }
   checkPoint(L.latLng(it.lat, it.lng), it.l1, it.l2);
 }
@@ -669,7 +679,8 @@ q.addEventListener("keydown", (e) => {
   else if (e.key === "Escape") hideSuggest();
 });
 q.addEventListener("focus", () => { if (isMobile() && !state.admin) setSheet("full"); });
-q.addEventListener("blur", () => setTimeout(hideSuggest, 120));
+q.addEventListener("blur", () => { setTimeout(hideSuggest, 120); setTimeout(() => window.scrollTo(0, 0), 50); });
+window.visualViewport && window.visualViewport.addEventListener("resize", () => { if (window.scrollY) window.scrollTo(0, 0); });
 $("#clearQ").onclick = () => { clearResult(); q.focus(); hideSuggest(); };
 
 $("#locate").onclick = () => {
